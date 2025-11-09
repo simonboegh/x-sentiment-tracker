@@ -1,78 +1,78 @@
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
-import snscrape.modules.twitter as sntwitter
+from transformers import pipeline
 import time
 
 # --- KONFIG ---
-st.set_page_config(page_title="X Sentiment", layout="wide")
-st.title("LIVE X-Sentiment – 100 % GRATIS & STABIL!")
+st.set_page_config(page_title="AI News Sentiment", layout="wide")
+st.title("AI Financial News Sentiment")
+st.markdown("*FinBERT analyserer live nyheder fra Yahoo Finance*")
 
-# --- ORDTÆLLING (INGEN AI = INGEN RAM!) ---
-POSITIVE_WORDS = ["bullish", "moon", "buy", "pump", "to the moon", "squeeze", "rocket", "long", "hodl", "diamond hands"]
-NEGATIVE_WORDS = ["bearish", "sell", "crash", "dump", "short", "paper hands", "falling", "dead"]
+# --- AI-MODEL (FinBERT – ÆGTE AI!) ---
+@st.cache_resource
+def load_ai():
+    return pipeline("text-classification", model="yiyanghkust/finbert-tone")
 
-def get_sentiment_score(tweets):
-    if not tweets:
-        return 0.0
-    pos_count = sum(1 for t in tweets if any(word in t.lower() for word in POSITIVE_WORDS))
-    neg_count = sum(1 for t in tweets if any(word in t.lower() for word in NEGATIVE_WORDS))
-    total = pos_count + neg_count
-    return (pos_count - neg_count) / total if total > 0 else 0.0
+ai = load_ai()
 
-# --- HENT TWEETS (max 8 – hurtigt!) ---
-def get_live_tweets(symbol):
-    query = f"${symbol} lang:en -filter:replies"
-    tweets = []
+# --- HENT NYHEDER + ANALYSÉR MED AI ---
+def analyze_news(symbol):
     try:
-        for i, tweet in enumerate(sntwitter.TwitterSearchScraper(query).get_items(), 1):
-            if i > 8: break
-            tweets.append(tweet.rawContent)
-        return tweets
+        ticker = yf.Ticker(symbol)
+        news = ticker.news[:5]  # 5 nyheder
+        sentiments = []
+        for item in news:
+            title = item['title']
+            result = ai(title)[0]
+            label = result['label']
+            score = result['score']
+            if label == 'Positive':
+                sentiments.append(score)
+            elif label == 'Negative':
+                sentiments.append(-score)
+            # Neutral → 0
+        return sum(sentiments)/len(sentiments) if sentiments else 0.0, news
     except:
-        return []
-
-# --- PRIS ---
-def get_price(symbol):
-    try:
-        return round(yf.Ticker(symbol).history(period="1d")['Close'].iloc[-1], 2)
-    except:
-        return "N/A"
+        return 0.0, []
 
 # --- AKTIER ---
-stocks = ["GME", "TSLA", "AMC"]
-names = ["GameStop", "Tesla", "AMC"]
+stocks = ["GME", "TSLA", "NVDA"]
+names = ["GameStop", "Tesla", "Nvidia"]
 
 # --- DASHBOARD ---
 for name, symbol in zip(names, stocks):
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.subheader(name)
-        st.metric("Pris", f"${get_price(symbol)}")
-        
-        tweets = get_live_tweets(symbol)
-        score = get_sentiment_score(tweets)
+        st.subheader(f"{name} (${symbol})")
+        sentiment, news = analyze_news(symbol)
         
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
-            value=score * 100,
-            title={'text': "Sentiment"},
-            gauge={'axis': {'range': [-100, 100]},
-                   'bar': {'color': "lime" if score > 0.1 else "red" if score < -0.1 else "gray"}}
+            value=sentiment * 100,
+            title={'text': "AI Sentiment"},
+            gauge={
+                'axis': {'range': [-100, 100]},
+                'bar': {'color': "lime" if sentiment > 0.1 else "red" if sentiment < -0.1 else "gray"}
+            }
         ))
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        with st.expander(f"Tweets om ${symbol}"):
-            if tweets:
-                for t in tweets:
-                    st.caption(t[:150] + "...")
+        with st.expander(f"AI-analyse af nyheder"):
+            if news:
+                for item in news:
+                    title = item['title']
+                    result = ai(title)[0]
+                    label = result['label']
+                    emoji = "🟢" if label == "Positive" else "🔴" if label == "Negative" else "⚪"
+                    st.write(f"{emoji} **{label}**: {title[:80]}...")
             else:
-                st.caption("Henter tweets...")
+                st.write("Henter nyheder...")
 
 # --- STATUS ---
-st.success("Kører på 200 MB RAM – ALTID STABILT!")
+st.success("**ÆGTE AI I PRAKSIS** – FinBERT analyserer live nyheder!")
 st.info("Opdaterer hvert 3. minut.")
 time.sleep(180)
 st.rerun()
