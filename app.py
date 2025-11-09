@@ -90,7 +90,7 @@ for name, symbol in zip(names, stocks):
                 },
             )
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"gauge_{symbol}")
+        st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
 
     with col2:
         with st.expander("AI-analyse af Reddit-kommentarer"):
