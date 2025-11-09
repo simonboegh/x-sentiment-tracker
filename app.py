@@ -72,8 +72,8 @@ def get_price(symbol):
         return None
 
 # --- DATA ---
-stocks = ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN"]
-names = ["Nvidia", "Tesla", "Apple", "Microsoft", "Amazon"]
+stocks = ["GME", "TSLA", "NVDA", "AAPL", "MSFT"]
+names = ["GameStop", "Tesla", "Nvidia", "Apple", "Microsoft"]
 
 # --- DASHBOARD ---
 cols = st.columns(5)
