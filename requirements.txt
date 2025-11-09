@@ -3,4 +3,3 @@ yfinance
 plotly
 transformers
 torch
-snscrape
