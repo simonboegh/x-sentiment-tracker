@@ -4,6 +4,9 @@ import plotly.graph_objects as go
 from transformers import pipeline
 import tweepy
 import time
+import os
+
+client = tweepy.Client(bearer_token=os.getenv("BEARER_TOKEN"), wait_on_rate_limit=True)
 
 st.set_page_config(page_title="X Sentiment Tracker", layout="wide")
 st.title("Real-time X-Sentiment Tracker (Nasdaq)")
