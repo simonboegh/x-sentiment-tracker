@@ -5,11 +5,8 @@ import praw
 
 # ------------------- PARAMETRE -------------------
 
-# Hvor mange WSB-tråde vi max kigger i pr. aktie
-MAX_SUBMISSIONS = 25
-
-# Hvor mange relevante kommentarer vi max analyserer pr. aktie
-MAX_COMMENTS = 200
+MAX_SUBMISSIONS = 25      # hvor mange WSB-tråde pr. aktie
+MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
 
 # ------------------- KONFIG & TITEL -------------------
 
@@ -97,7 +94,6 @@ def get_reddit_sentiment(symbol: str):
         raw_comments_count = len(comments)
 
         if raw_comments_count == 0:
-            # score, fejltekst, bull_ex, bear_ex, counts..., posts_used, raw_comments_count
             return 0, "Ingen relevante kommentarer fundet lige nu", None, None, 0, 0, 0, 0, posts_used, raw_comments_count
 
         analyzed = []
@@ -130,7 +126,6 @@ def get_reddit_sentiment(symbol: str):
         n_total = n_bull + n_bear + n_neutral
 
         if n_bull + n_bear > 0:
-            # Netto-bullish i procent: -100..100
             score_100 = round(100 * (n_bull - n_bear) / (n_bull + n_bear))
         else:
             score_100 = 0
@@ -142,7 +137,6 @@ def get_reddit_sentiment(symbol: str):
         bull_example = max(bull_candidates, key=lambda x: x[2]) if bull_candidates else None
         bear_example = max(bear_candidates, key=lambda x: x[2]) if bear_candidates else None
 
-        # score, ingen fejltekst, bull_ex, bear_ex, counts..., posts_used, raw_comments_count
         return (
             score_100,
             None,
@@ -164,88 +158,105 @@ def get_reddit_sentiment(symbol: str):
 stocks = ["TSLA", "PLTR", "SPY"]
 names = ["Tesla", "Palantir", "S&P 500 (SPY)"]
 
-# ------------------- DASHBOARD -------------------
+# Hent data til alle aktier én gang
+results = {}
+for symbol in stocks:
+    results[symbol] = get_reddit_sentiment(symbol)
+
+# ------------------- RAD 1: 3 GAUGES PÅ STRIBE -------------------
+
+st.subheader("WallStreetBets-sentiment (Reddit-kommentarer)")
+
+cols = st.columns(3)
+
+for col, (name, symbol) in zip(cols, zip(names, stocks)):
+    (
+        score_100,
+        error_msg,
+        bull_ex,
+        bear_ex,
+        n_total,
+        n_bull,
+        n_bear,
+        n_neutral,
+        posts_used,
+        raw_comments_count,
+    ) = results[symbol]
+
+    with col:
+        st.markdown(f"### {name} (`{symbol}`)")
+
+        if error_msg:
+            st.info(error_msg)
+        else:
+            sentiment_text = score_to_text(score_100)
+            st.markdown(
+                f"**WSB er {sentiment_text} på `{symbol}` lige nu.**  \n"
+                f"Score: **{score_100}** (−100 bearish, 0 neutral, +100 bullish)."
+            )
+
+            fig = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=score_100,
+                    title={"text": "Netto-bullish sentiment"},
+                    gauge={
+                        "axis": {"range": [-100, 100]},
+                        "bar": {
+                            "color": "lime"
+                            if score_100 > 10
+                            else "red"
+                            if score_100 < -10
+                            else "gray"
+                        },
+                    },
+                )
+            )
+            st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
+
+            st.caption(
+                f"{n_total} kommentarer (ud af {raw_comments_count} relevante) "
+                f"fra {posts_used} WSB-tråde – 🐂 {n_bull} / 🐻 {n_bear} / 😶 {n_neutral}."
+            )
+
+# ------------------- RAD 2: EKSEMPLER PÅ KOMMENTARER -------------------
+
+st.subheader("Eksempler på kommentarer (AI-udvalgt)")
 
 for name, symbol in zip(names, stocks):
-    col1, col2 = st.columns([1, 2])
+    (
+        score_100,
+        error_msg,
+        bull_ex,
+        bear_ex,
+        n_total,
+        n_bull,
+        n_bear,
+        n_neutral,
+        posts_used,
+        raw_comments_count,
+    ) = results[symbol]
 
-    with col1:
-        st.subheader(f"{name} (${symbol})")
+    with st.expander(f"{name} (`{symbol}`)"):
+        if error_msg:
+            st.info(error_msg)
+            continue
 
-        with st.spinner("Henter Reddit..."):
-            (
-                score_100,
-                error_msg,
-                bull_ex,
-                bear_ex,
-                n_total,
-                n_bull,
-                n_bear,
-                n_neutral,
-                posts_used,
-                raw_comments_count,
-            ) = get_reddit_sentiment(symbol)
-
-        sentiment_text = score_to_text(score_100)
-
-        st.markdown(
-            f"**WSB er {sentiment_text} på `{symbol}` lige nu.**  \n"
-            f"Sentimentscoren er **{score_100}**, hvor "
-            "**-100** betyder kun bearish kommentarer, **0** betyder lige mange bullish og bearish, "
-            "og **+100** betyder kun bullish."
-        )
-
-        # Gør datagrundlaget tydeligt
-        st.caption(
-            f"Baseret på **{n_total} analyserede kommentarer** "
-            f"(ud af {raw_comments_count} relevante) fra **{posts_used} WSB-tråde**, "
-            f"der nævner `{symbol}`."
-        )
-        st.caption(
-            f"Fordeling: 🐂 **{n_bull} bullish**, 🐻 **{n_bear} bearish**, 😶 **{n_neutral} neutrale**."
-        )
-
-        fig = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=score_100,
-                title={"text": "Netto-bullish sentiment (-100 til +100)"},
-                gauge={
-                    "axis": {"range": [-100, 100]},
-                    "bar": {
-                        "color": "lime"
-                        if score_100 > 10
-                        else "red"
-                        if score_100 < -10
-                        else "gray"
-                    },
-                },
-            )
-        )
-        st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
-
-    with col2:
-        with st.expander("Eksempler på kommentarer (AI-udvalgt)"):
-            if error_msg:
-                st.info(error_msg)
-            else:
-                if bull_ex:
-                    text, _, conf = bull_ex
-                    st.subheader("🐂 Bullish eksempel")
-                    st.caption(f"Model-sikkerhed: {conf:.2f}")
-                    st.write(text)
-                else:
-                    st.info("Ingen tydeligt bullish kommentar fundet lige nu.")
-
-                st.markdown("---")
-
-                if bear_ex:
-                    text, _, conf = bear_ex
-                    st.subheader("🐻 Bearish eksempel")
-                    st.caption(f"Model-sikkerhed: {conf:.2f}")
-                    st.write(text)
-                else:
-                    st.info("Ingen tydeligt bearish kommentar fundet lige nu.")
+        if bull_ex:
+            text, _, conf = bull_ex
+            st.markdown("#### 🐂 Bullish eksempel")
+            st.caption(f"Model-sikkerhed: {conf:.2f}")
+            st.write(text)
+        else:
+            st.info("Ingen tydeligt bullish kommentar fundet lige nu.")
+        st.markdown("---")
+        if bear_ex:
+            text, _, conf = bear_ex
+            st.markdown("#### 🐻 Bearish eksempel")
+            st.caption(f"Model-sikkerhed: {conf:.2f}")
+            st.write(text)
+        else:
+            st.info("Ingen tydeligt bearish kommentar fundet lige nu.")
 
 # ------------------- STATUS -------------------
 
