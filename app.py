@@ -1,8 +1,8 @@
 import time
+import requests
 import streamlit as st
 import plotly.graph_objects as go
 from transformers.pipelines import pipeline
-from pmaw import PushshiftAPI
 
 # --- KONFIG ---
 st.set_page_config(page_title="Reddit AI", layout="wide")
@@ -17,21 +17,31 @@ def load_ai():
 
 ai = load_ai()
 
-# --- HENT REDDIT KOMMENTARER ---
+# --- HENT REDDIT KOMMENTARER VIA PUSHSHIFT ---
 @st.cache_data(ttl=180)  # Opdater hvert 3. minut
 def get_reddit_sentiment(symbol: str):
-    api = PushshiftAPI()
+    url = "https://api.pushshift.io/reddit/comment/search"
+    params = {
+        "q": f"${symbol}",
+        "subreddit": "wallstreetbets",
+        "size": 30,
+        "fields": "body",
+        "sort": "desc",
+        "sort_type": "created_utc",
+    }
+
     try:
-        comments = api.search_comments(
-            q=f"${symbol}",
-            subreddit="wallstreetbets",
-            limit=30,
-            filter=["body"],
-        )
-        comments = [c["body"] for c in comments if len(c["body"]) > 15]
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+
+        comments = [
+            item.get("body", "")
+            for item in data
+            if len(item.get("body", "")) > 15
+        ]
 
         if not comments:
-            # Returnér en tekstbesked når der ikke er noget at analysere
             return 0.0, "Ingen kommentarer fundet lige nu"
 
         scores = []
@@ -54,9 +64,9 @@ def get_reddit_sentiment(symbol: str):
 
         avg = sum(scores) / len(scores) if scores else 0.0
         return avg, analyzed
+
     except Exception as e:
-        # Returnér en tekstbesked hvis Reddit / Pushshift fejler
-        return 0.0, f"Reddit fejl: {str(e)[:80]}"
+        return 0.0, f"Reddit fejl: {str(e)[:120]}"
 
 # --- 3 AKTIER ---
 stocks = ["GME", "TSLA", "NVDA"]
@@ -90,15 +100,16 @@ for name, symbol in zip(names, stocks):
                 },
             )
         )
+        # Ny stil i stedet for use_container_width
         st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
 
     with col2:
         with st.expander("AI-analyse af Reddit-kommentarer"):
-            # Hvis analysis er en tekststreng → vis info-boks
             if isinstance(analysis, str):
+                # Tekstbesked (fejl eller "ingen kommentarer")
                 st.info(analysis)
             else:
-                # Ellers forventer vi en liste af (text, label, score)
+                # Liste af (text, label, score)
                 for text, label, score in analysis:
                     emoji = (
                         "Bullish"
@@ -111,10 +122,5 @@ for name, symbol in zip(names, stocks):
                     st.caption(text[:120] + "..." if len(text) > 120 else text)
 
 # --- STATUS ---
-st.success("**LIVE Reddit + AI kører 🚀**")
+st.success("LIVE Reddit + AI kører 🚀")
 st.info("Data gemmes i cache i 3 minutter (ttl=180).")
-
-# Jeg vil *stærkt* anbefale at fjerne den her blok i første omgang:
-# time.sleep(180)
-# st.rerun()
-# På Streamlit Cloud kan den slags sleep + rerun give timeouts.
