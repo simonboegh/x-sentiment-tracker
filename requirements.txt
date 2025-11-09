@@ -1,6 +1,6 @@
 streamlit
 yfinance
 plotly
-tweepy
 transformers
 torch
+snscrape
