@@ -4,59 +4,70 @@ import plotly.graph_objects as go
 from transformers import pipeline
 import tweepy
 import os
+import threading
+import time
 
-# --- KONFIGURATION ---
+# --- KONFIG ---
 st.set_page_config(page_title="X Sentiment Tracker", layout="wide")
 st.title("Real-time X-Sentiment Tracker (Nasdaq)")
 
-# --- LOAD FINBERT MODEL (én gang) ---
+# --- LOAD MODEL ---
 @st.cache_resource
 def load_model():
     return pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
 
 model = load_model()
 
-# --- X API CLIENT (fra Streamlit Secrets) ---
+# --- X CLIENT ---
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     wait_on_rate_limit=True
 )
 
-# --- HENT TWEETS (sikker og hurtig) ---
-def get_tweets(symbol):
-    query = f"${symbol} OR '{symbol} stock' -is:retweet lang:en"
-    try:
-        response = client.search_recent_tweets(
-            query=query,
-            max_results=20,
-            tweet_fields=['created_at']
-        )
-        if response.data:
-            return [tweet.text for tweet in response.data]
-        else:
-            return ["Ingen tweets fundet lige nu."]
-    except Exception as e:
-        return [f"API-fejl: {str(e)[:50]}..."]
+# --- HENT TWEETS MED TIMEOUT (max 10 sek) ---
+def get_tweets_with_timeout(symbol, timeout=10):
+    result = ["Laster..."]
+    def fetch():
+        query = f"${symbol} OR '{symbol} stock' -is:retweet lang:en"
+        try:
+            resp = client.search_recent_tweets(
+                query=query,
+                max_results=20,
+                tweet_fields=['created_at']
+            )
+            if resp.data:
+                result[0] = [t.text for t in resp.data]
+            else:
+                result[0] = ["Ingen tweets fundet."]
+        except Exception as e:
+            result[0] = [f"API-fejl: {str(e)[:40]}..."]
+    
+    thread = threading.Thread(target=fetch)
+    thread.start()
+    thread.join(timeout)
+    
+    if thread.is_alive():
+        return ["Timeout – prøver igen snart."]
+    return result[0]
 
-# --- SENTIMENT ANALYSE (robust) ---
+# --- SENTIMENT ---
 def get_sentiment(tweets):
-    if not tweets or "Ingen" in tweets[0] or "API-fejl" in tweets[0]:
+    if not tweets or any(x.startswith(("Ingen", "API", "Timeout", "Laster")) for x in tweets):
         return 0.0
     scores = []
-    for tweet in tweets[:5]:
+    for t in tweets[:5]:
         try:
-            result = model(tweet)[0]
-            score = result['score'] if result['label'] == 'positive' else -result['score']
-            scores.append(score)
+            r = model(t)[0]
+            s = r['score'] if r['label'] == 'positive' else -r['score']
+            scores.append(s)
         except:
             continue
-    return sum(scores) / len(scores) if scores else 0.0
+    return sum(scores)/len(scores) if scores else 0.0
 
-# --- HENT AKTIERPRIS ---
+# --- PRIS ---
 def get_price(symbol):
     try:
-        price = yf.Ticker(symbol).history(period="1d")['Close'].iloc[-1]
-        return round(price, 2)
+        return round(yf.Ticker(symbol).history(period="1d")['Close'].iloc[-1], 2)
     except:
         return None
 
@@ -71,16 +82,15 @@ for i, (name, symbol) in enumerate(zip(names, stocks)):
     with cols[i]:
         st.subheader(name)
         
-        with st.spinner(f"Henter ${symbol}..."):
-            tweets = get_tweets(symbol)
-            score = get_sentiment(tweets)
-            price = get_price(symbol)
+        # Hent med timeout
+        tweets = get_tweets_with_timeout(symbol, timeout=8)
+        score = get_sentiment(tweets)
+        price = get_price(symbol)
         
-        # Sentiment gauge
+        # Gauge
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
             value=score * 100,
-            domain={'x': [0, 1], 'y': [0, 1]},
             title={'text': "Sentiment"},
             gauge={
                 'axis': {'range': [-100, 100]},
@@ -94,17 +104,11 @@ for i, (name, symbol) in enumerate(zip(names, stocks)):
         ))
         st.plotly_chart(fig, use_container_width=True)
         
-        # Pris
         st.metric("Pris (USD)", f"${price}" if price else "N/A")
         
-        # Tweets
-        with st.expander("Seneste tweets"):
+        with st.expander("Tweets"):
             for t in tweets[:3]:
                 st.caption(t)
 
-# --- AUTO-REFRESH (hver 5. minut) ---
-st.info("Opdateres hvert 5. minut...")
-# time.sleep(300)  # Fjern kommentar når det kører stabilt
-# st.rerun()
-
-st.success("Live data kører! 🚀")
+# --- STATUS ---
+st.success("Live – opdateres hvert 5. min!")
