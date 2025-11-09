@@ -45,7 +45,6 @@ def get_reddit_sentiment(symbol: str):
     subreddit = reddit.subreddit("wallstreetbets")
     comments = []
 
-    # Tekststumper vi vil filtrere væk (rapporter, auto-bots osv.)
     blocked_phrases = [
         "User Report",
         "Total Submissions",
@@ -55,12 +54,11 @@ def get_reddit_sentiment(symbol: str):
     ]
 
     try:
-        # Find de nyeste posts der nævner symbolet
+        # 1) Hent rå-kommentarer
         for submission in subreddit.search(f"${symbol}", sort="new", limit=5):
             submission.comments.replace_more(limit=0)
             for c in submission.comments.list():
                 text = getattr(c, "body", "")
-                # Filtrer meget korte, meget lange og åbenlys “meta”-tekst fra
                 if len(text) < 20 or len(text) > 800:
                     continue
                 if any(bad in text for bad in blocked_phrases):
@@ -72,11 +70,11 @@ def get_reddit_sentiment(symbol: str):
                 break
 
         if not comments:
-            return 0, "Ingen kommentarer fundet lige nu"
+            return 0, "Ingen kommentarer fundet lige nu", 0, 0, 0, 0
 
         analyzed = []
 
-        # Kør FinBERT på op til 15 kommentarer
+        # 2) Kør FinBERT
         for text in comments[:15]:
             try:
                 result = ai(text)[0]
@@ -95,26 +93,26 @@ def get_reddit_sentiment(symbol: str):
                 continue
 
         if not analyzed:
-            return 0, "Kunne ikke analysere kommentarer lige nu"
+            return 0, "Kunne ikke analysere kommentarer lige nu", 0, 0, 0, 0
 
-        # Tæl bullish/bearish til en intuitiv score
+        # 3) Tæl bullish / bearish / neutral
         n_bull = sum(1 for _, s, _ in analyzed if s == "Bullish")
         n_bear = sum(1 for _, s, _ in analyzed if s == "Bearish")
+        n_neutral = sum(1 for _, s, _ in analyzed if s == "Neutral")
+        n_total = n_bull + n_bear + n_neutral
 
         if n_bull + n_bear > 0:
-            # Netto-bullish i procent: -100..100
             score_100 = round(100 * (n_bull - n_bear) / (n_bull + n_bear))
         else:
             score_100 = 0
 
-        # Sortér så de mest “sikre” analyser står øverst
         analyzed_sorted = sorted(analyzed, key=lambda x: x[2], reverse=True)
 
-        # Vi viser de 8 mest interessante kommentarer
-        return score_100, analyzed_sorted[:8]
+        # Returnér også counts
+        return score_100, analyzed_sorted[:8], n_total, n_bull, n_bear, n_neutral
 
     except Exception as e:
-        return 0, f"Reddit fejl: {str(e)[:120]}"
+        return 0, f"Reddit fejl: {str(e)[:120]}", 0, 0, 0, 0
 
 # --- AKTIER I DASHBOARD ---
 stocks = ["GME", "TSLA", "NVDA"]
@@ -128,9 +126,8 @@ for name, symbol in zip(names, stocks):
         st.subheader(f"{name} (${symbol})")
 
         with st.spinner("Henter Reddit..."):
-            score_100, analysis = get_reddit_sentiment(symbol)
+            score_100, analysis, n_total, n_bull, n_bear, n_neutral = get_reddit_sentiment(symbol)
 
-        # Menneskelig forklaring
         sentiment_text = score_to_text(score_100)
         st.markdown(
             f"**WSB er {sentiment_text} på `{symbol}` lige nu.**  \n"
@@ -139,7 +136,12 @@ for name, symbol in zip(names, stocks):
             "og **+100** betyder kun bullish."
         )
 
-        # Gauge-plot
+        # Vis hvor mange kommentarer der ligger bag
+        st.caption(
+            f"Analyseret **{n_total}** kommentarer: "
+            f"🐂 **{n_bull} bullish**, 🐻 **{n_bear} bearish**, 😶 **{n_neutral} neutrale**."
+        )
+
         fig = go.Figure(
             go.Indicator(
                 mode="gauge+number",
@@ -162,7 +164,6 @@ for name, symbol in zip(names, stocks):
     with col2:
         with st.expander("AI-analyse af Reddit-kommentarer"):
             if isinstance(analysis, str):
-                # Hvis analysis kun er en tekstbesked (fejl / ingen data)
                 st.info(analysis)
             else:
                 for text, sentiment_word, conf in analysis:
