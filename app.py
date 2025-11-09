@@ -7,18 +7,22 @@ import time
 
 # --- KONFIG ---
 st.set_page_config(page_title="LIVE X Sentiment", layout="wide")
-st.title("LIVE X-Sentiment Tracker (Nasdaq) – GRATIS & UDEN API!")
+st.title("LIVE X-Sentiment Tracker – GRATIS & LAV RAM!")
 
-# --- FINBERT MODEL ---
+# --- LILLE, HURTIG MODEL (300 MB) ---
 @st.cache_resource
 def load_model():
-    return pipeline("sentiment-analysis", model="ProsusAI/finbert")
+    return pipeline(
+        "sentiment-analysis",
+        model="mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis",
+        device=-1  # CPU
+    )
 
 model = load_model()
 
-# --- HENT TWEETS MED SNSCRAPE (GRATIS!) ---
-def get_live_tweets(symbol, max_results=20):
-    query = f"${symbol} OR '{symbol} stock' lang:en -filter:replies"
+# --- HENT TWEETS (GRATIS) ---
+def get_live_tweets(symbol, max_results=15):
+    query = f"${symbol} lang:en -filter:replies"
     tweets = []
     try:
         for i, tweet in enumerate(sntwitter.TwitterSearchScraper(query).get_items()):
@@ -26,24 +30,26 @@ def get_live_tweets(symbol, max_results=20):
                 break
             tweets.append(tweet.rawContent)
         if tweets:
-            st.success(f"**{symbol}: Fundet {len(tweets)} LIVE tweets!**")
-        else:
-            st.info(f"**{symbol}: Ingen tweets lige nu.**")
+            st.success(f"**{symbol}: {len(tweets)} tweets**")
         return tweets
-    except Exception as e:
-        st.error(f"**Fejl:** {str(e)[:50]}")
+    except:
+        st.warning(f"**{symbol}: Ingen tweets**")
         return []
 
-# --- SENTIMENT ---
+# --- SENTIMENT (hurtig) ---
 def get_sentiment(tweets):
     if not tweets:
         return 0.0
     scores = []
-    for t in tweets[:10]:
+    for t in tweets[:5]:
         try:
-            r = model(t)[0]
-            s = r['score'] if r['label'] == 'positive' else -r['score']
-            scores.append(s)
+            result = model(t[:512])[0]  # Max 512 tegn
+            label = result['label']
+            score = result['score']
+            if label in ['positive', 'POS']:
+                scores.append(score)
+            elif label in ['negative', 'NEG']:
+                scores.append(-score)
         except:
             continue
     return sum(scores)/len(scores) if scores else 0.0
@@ -55,7 +61,7 @@ def get_price(symbol):
     except:
         return None
 
-# --- AKTIER MED HØJ X-AKTIVITET ---
+# --- AKTIER ---
 stocks = ["GME", "TSLA", "AMC"]
 names = ["GameStop", "Tesla", "AMC"]
 
@@ -66,7 +72,7 @@ for i, (name, symbol) in enumerate(zip(names, stocks)):
     with cols[i]:
         st.subheader(f"{name} (${symbol})")
         
-        tweets = get_live_tweets(symbol, max_results=30)
+        tweets = get_live_tweets(symbol)
         score = get_sentiment(tweets)
         price = get_price(symbol)
         
@@ -74,26 +80,21 @@ for i, (name, symbol) in enumerate(zip(names, stocks)):
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
             value=score * 100,
-            title={'text': "LIVE Sentiment"},
+            title={'text': "Sentiment"},
             gauge={
                 'axis': {'range': [-100, 100]},
-                'bar': {'color': "lime" if score > 0.2 else "red" if score < -0.2 else "gray"},
-                'steps': [
-                    {'range': [-100, -30], 'color': "darkred"},
-                    {'range': [-30, 30], 'color': "orange"},
-                    {'range': [30, 100], 'color': "lightgreen"}
-                ]
+                'bar': {'color': "lime" if score > 0.1 else "red" if score < -0.1 else "gray"}
             }
         ))
         st.plotly_chart(fig, use_container_width=True)
         
-        st.metric("Pris (USD)", f"${price}" if price else "N/A")
+        st.metric("Pris", f"${price}" if price else "N/A")
         
-        with st.expander("LIVE Tweets"):
-            for t in tweets[:5]:
-                st.caption(t)
+        with st.expander("Tweets"):
+            for t in tweets[:3]:
+                st.caption(t[:100] + "...")
 
-# --- AUTO-REFRESH ---
-st.info("Opdaterer automatisk hvert 3. minut!")
+# --- STATUS ---
+st.success("Kører på gratis Streamlit! Opdaterer hvert 3. min.")
 time.sleep(180)
 st.rerun()
