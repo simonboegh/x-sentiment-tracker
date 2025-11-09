@@ -8,10 +8,10 @@ import threading
 import time
 
 # --- KONFIG ---
-st.set_page_config(page_title="X Sentiment Tracker", layout="wide")
-st.title("Real-time X-Sentiment Tracker (Nasdaq)")
+st.set_page_config(page_title="LIVE X Sentiment", layout="wide")
+st.title("LIVE X-Sentiment Tracker (Nasdaq)")
 
-# --- LOAD MODEL ---
+# --- MODEL ---
 @st.cache_resource
 def load_model():
     return pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
@@ -24,38 +24,44 @@ client = tweepy.Client(
     wait_on_rate_limit=True
 )
 
-# --- HENT TWEETS MED TIMEOUT (max 10 sek) ---
-def get_tweets_with_timeout(symbol, timeout=10):
-    result = ["Laster..."]
+# --- HENT TWEETS (LIVE) ---
+def get_live_tweets(symbol, timeout=10):
+    result = ["Henter..."]
     def fetch():
-        query = f"${symbol} OR '{symbol} stock' -is:retweet lang:en"
+        # SØGNING DER VIRKER LIVE
+        query = f"${symbol} OR '{symbol} stock' OR '{symbol} price' -is:retweet lang:en"
         try:
             resp = client.search_recent_tweets(
                 query=query,
-                max_results=20,
-                tweet_fields=['created_at']
+                max_results=50,  # Mere chance
+                tweet_fields=['created_at', 'author_id']
             )
             if resp.data:
-                result[0] = [t.text for t in resp.data]
+                tweets = [t.text for t in resp.data]
+                st.success(f"**{symbol}: Fundet {len(tweets)} LIVE tweets!**")
+                result[0] = tweets
             else:
-                result[0] = ["Ingen tweets fundet."]
+                st.info(f"**{symbol}: Ingen tweets lige nu – prøver igen snart.**")
+                result[0] = []
         except Exception as e:
-            result[0] = [f"API-fejl: {str(e)[:40]}..."]
+            st.error(f"**{symbol} fejl:** {str(e)[:50]}")
+            result[0] = []
     
     thread = threading.Thread(target=fetch)
     thread.start()
     thread.join(timeout)
     
     if thread.is_alive():
-        return ["Timeout – prøver igen snart."]
+        st.warning(f"**{symbol}: Timeout – prøver igen.**")
+        return []
     return result[0]
 
 # --- SENTIMENT ---
 def get_sentiment(tweets):
-    if not tweets or any(x.startswith(("Ingen", "API", "Timeout", "Laster")) for x in tweets):
+    if not tweets:
         return 0.0
     scores = []
-    for t in tweets[:5]:
+    for t in tweets[:10]:
         try:
             r = model(t)[0]
             s = r['score'] if r['label'] == 'positive' else -r['score']
@@ -71,44 +77,49 @@ def get_price(symbol):
     except:
         return None
 
-# --- DATA ---
-stocks = ["GME", "TSLA", "NVDA", "AAPL", "MSFT"]
-names = ["GameStop", "Tesla", "Nvidia", "Apple", "Microsoft"]
+# --- AKTIER MED HØJ X-AKTIVITET (GARANTI FOR TWEETS) ---
+stocks = ["GME", "TSLA", "AMC"]
+names = ["GameStop", "Tesla", "AMC Entertainment"]
 
 # --- DASHBOARD ---
-cols = st.columns(5)
+cols = st.columns(3)
 
 for i, (name, symbol) in enumerate(zip(names, stocks)):
     with cols[i]:
-        st.subheader(name)
+        st.subheader(f"{name} (${symbol})")
         
-        # Hent med timeout
-        tweets = get_tweets_with_timeout(symbol, timeout=8)
+        tweets = get_live_tweets(symbol, timeout=10)
         score = get_sentiment(tweets)
         price = get_price(symbol)
         
         # Gauge
         fig = go.Figure(go.Indicator(
-            mode="gauge+number",
+            mode="gauge+number+delta",
             value=score * 100,
-            title={'text': "Sentiment"},
+            delta={'reference': 0},
+            title={'text': "LIVE Sentiment"},
             gauge={
                 'axis': {'range': [-100, 100]},
-                'bar': {'color': "green" if score > 0 else "red"},
+                'bar': {'color': "cyan" if score > 0.3 else "magenta" if score < -0.3 else "yellow"},
                 'steps': [
-                    {'range': [-100, -30], 'color': "darkred"},
-                    {'range': [-30, 30], 'color': "orange"},
-                    {'range': [30, 100], 'color': "lightgreen"}
+                    {'range': [-100, -40], 'color': "red"},
+                    {'range': [-40, 40], 'color': "gray"},
+                    {'range': [40, 100], 'color': "lime"}
                 ]
             }
         ))
         st.plotly_chart(fig, use_container_width=True)
         
-        st.metric("Pris (USD)", f"${price}" if price else "N/A")
+        st.metric("Pris (USD)", f"${price}" if price else "N/A", delta=None)
         
-        with st.expander("Tweets"):
-            for t in tweets[:3]:
-                st.caption(t)
+        with st.expander("LIVE Tweets"):
+            if tweets:
+                for t in tweets[:5]:
+                    st.caption(t)
+            else:
+                st.caption("Venter på nye tweets...")
 
-# --- STATUS ---
-st.success("Live – opdateres hvert 5. min!")
+# --- AUTO-REFRESH ---
+st.info("Opdaterer automatisk hvert 3. minut!")
+time.sleep(180)
+st.rerun()
