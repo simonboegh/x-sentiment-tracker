@@ -2,59 +2,37 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 from transformers import pipeline
-import tweepy
-import os
-import threading
+import snscrape.modules.twitter as sntwitter
 import time
 
 # --- KONFIG ---
 st.set_page_config(page_title="LIVE X Sentiment", layout="wide")
-st.title("LIVE X-Sentiment Tracker (Nasdaq)")
+st.title("LIVE X-Sentiment Tracker (Nasdaq) – GRATIS & UDEN API!")
 
-# --- MODEL ---
+# --- FINBERT MODEL ---
 @st.cache_resource
 def load_model():
-    return pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
+    return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 model = load_model()
 
-# --- X CLIENT ---
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
-    wait_on_rate_limit=True
-)
-
-# --- HENT TWEETS (LIVE) ---
-def get_live_tweets(symbol, timeout=10):
-    result = ["Henter..."]
-    def fetch():
-        # SØGNING DER VIRKER LIVE
-        query = f"${symbol} OR '{symbol} stock' OR '{symbol} price' -is:retweet lang:en"
-        try:
-            resp = client.search_recent_tweets(
-                query=query,
-                max_results=50,  # Mere chance
-                tweet_fields=['created_at', 'author_id']
-            )
-            if resp.data:
-                tweets = [t.text for t in resp.data]
-                st.success(f"**{symbol}: Fundet {len(tweets)} LIVE tweets!**")
-                result[0] = tweets
-            else:
-                st.info(f"**{symbol}: Ingen tweets lige nu – prøver igen snart.**")
-                result[0] = []
-        except Exception as e:
-            st.error(f"**{symbol} fejl:** {str(e)[:50]}")
-            result[0] = []
-    
-    thread = threading.Thread(target=fetch)
-    thread.start()
-    thread.join(timeout)
-    
-    if thread.is_alive():
-        st.warning(f"**{symbol}: Timeout – prøver igen.**")
+# --- HENT TWEETS MED SNSCRAPE (GRATIS!) ---
+def get_live_tweets(symbol, max_results=20):
+    query = f"${symbol} OR '{symbol} stock' lang:en -filter:replies"
+    tweets = []
+    try:
+        for i, tweet in enumerate(sntwitter.TwitterSearchScraper(query).get_items()):
+            if i >= max_results:
+                break
+            tweets.append(tweet.rawContent)
+        if tweets:
+            st.success(f"**{symbol}: Fundet {len(tweets)} LIVE tweets!**")
+        else:
+            st.info(f"**{symbol}: Ingen tweets lige nu.**")
+        return tweets
+    except Exception as e:
+        st.error(f"**Fejl:** {str(e)[:50]}")
         return []
-    return result[0]
 
 # --- SENTIMENT ---
 def get_sentiment(tweets):
@@ -77,9 +55,9 @@ def get_price(symbol):
     except:
         return None
 
-# --- AKTIER MED HØJ X-AKTIVITET (GARANTI FOR TWEETS) ---
+# --- AKTIER MED HØJ X-AKTIVITET ---
 stocks = ["GME", "TSLA", "AMC"]
-names = ["GameStop", "Tesla", "AMC Entertainment"]
+names = ["GameStop", "Tesla", "AMC"]
 
 # --- DASHBOARD ---
 cols = st.columns(3)
@@ -88,36 +66,32 @@ for i, (name, symbol) in enumerate(zip(names, stocks)):
     with cols[i]:
         st.subheader(f"{name} (${symbol})")
         
-        tweets = get_live_tweets(symbol, timeout=10)
+        tweets = get_live_tweets(symbol, max_results=30)
         score = get_sentiment(tweets)
         price = get_price(symbol)
         
         # Gauge
         fig = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
+            mode="gauge+number",
             value=score * 100,
-            delta={'reference': 0},
             title={'text': "LIVE Sentiment"},
             gauge={
                 'axis': {'range': [-100, 100]},
-                'bar': {'color': "cyan" if score > 0.3 else "magenta" if score < -0.3 else "yellow"},
+                'bar': {'color': "lime" if score > 0.2 else "red" if score < -0.2 else "gray"},
                 'steps': [
-                    {'range': [-100, -40], 'color': "red"},
-                    {'range': [-40, 40], 'color': "gray"},
-                    {'range': [40, 100], 'color': "lime"}
+                    {'range': [-100, -30], 'color': "darkred"},
+                    {'range': [-30, 30], 'color': "orange"},
+                    {'range': [30, 100], 'color': "lightgreen"}
                 ]
             }
         ))
         st.plotly_chart(fig, use_container_width=True)
         
-        st.metric("Pris (USD)", f"${price}" if price else "N/A", delta=None)
+        st.metric("Pris (USD)", f"${price}" if price else "N/A")
         
         with st.expander("LIVE Tweets"):
-            if tweets:
-                for t in tweets[:5]:
-                    st.caption(t)
-            else:
-                st.caption("Venter på nye tweets...")
+            for t in tweets[:5]:
+                st.caption(t)
 
 # --- AUTO-REFRESH ---
 st.info("Opdaterer automatisk hvert 3. minut!")
