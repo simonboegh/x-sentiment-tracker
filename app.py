@@ -18,7 +18,7 @@ def load_ai():
 ai = load_ai()
 
 # --- HENT REDDIT KOMMENTARER VIA PUSHSHIFT ---
-@st.cache_data(ttl=180)  # Opdater hvert 3. minut
+@st.cache_data(ttl=180)
 def get_reddit_sentiment(symbol: str):
     url = "https://api.pushshift.io/reddit/comment/search"
     params = {
@@ -29,9 +29,12 @@ def get_reddit_sentiment(symbol: str):
         "sort": "desc",
         "sort_type": "created_utc",
     }
+    headers = {
+        "User-Agent": "RedditSentimentApp/0.1 (by u-dit_reddit_bruger)"  # skriv et eller andet her
+    }
 
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         r.raise_for_status()
         data = r.json().get("data", [])
 
@@ -47,7 +50,7 @@ def get_reddit_sentiment(symbol: str):
         scores = []
         analyzed = []
 
-        for text in comments[:7]:  # 7 kommentarer
+        for text in comments[:7]:
             try:
                 result = ai(text)[0]
                 label = result["label"]
