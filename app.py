@@ -102,7 +102,7 @@ def get_reddit_sentiment(symbol: str):
 
         analyzed = []
 
-        # 2) Kør FinBERT på ALLE relevante kommentarer (op til MAX_COMMENTS)
+        # 2) Kør FinBERT på ALLE relevante kommentarer
         for text in comments:
             try:
                 result = ai(text)[0]
@@ -161,8 +161,8 @@ def get_reddit_sentiment(symbol: str):
 
 # ------------------- AKTIER I DASHBOARD -------------------
 
-stocks = ["GME", "TSLA", "NVDA"]
-names = ["GameStop", "Tesla", "Nvidia"]
+stocks = ["TSLA", "PLTR", "SPY"]
+names = ["Tesla", "Palantir", "S&P 500 (SPY)"]
 
 # ------------------- DASHBOARD -------------------
 
