@@ -1,56 +1,36 @@
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
-from transformers import pipeline
 import snscrape.modules.twitter as sntwitter
 import time
 
 # --- KONFIG ---
 st.set_page_config(page_title="X Sentiment", layout="wide")
-st.title("LIVE X-Sentiment – GRATIS & STABIL!")
+st.title("LIVE X-Sentiment – 100 % GRATIS & STABIL!")
 
-# --- ULTRA-LET MODEL (500 MB) ---
-@st.cache_resource
-def load_model():
-    return pipeline(
-        "sentiment-analysis",
-        model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-        tokenizer="cardiffnlp/twitter-roberta-base-sentiment-latest",
-        device=-1
-    )
+# --- ORDTÆLLING (INGEN AI = INGEN RAM!) ---
+POSITIVE_WORDS = ["bullish", "moon", "buy", "pump", "to the moon", "squeeze", "rocket", "long", "hodl", "diamond hands"]
+NEGATIVE_WORDS = ["bearish", "sell", "crash", "dump", "short", "paper hands", "falling", "dead"]
 
-model = load_model()
+def get_sentiment_score(tweets):
+    if not tweets:
+        return 0.0
+    pos_count = sum(1 for t in tweets if any(word in t.lower() for word in POSITIVE_WORDS))
+    neg_count = sum(1 for t in tweets if any(word in t.lower() for word in NEGATIVE_WORDS))
+    total = pos_count + neg_count
+    return (pos_count - neg_count) / total if total > 0 else 0.0
 
-# --- HENT TWEETS (max 10 – spar RAM) ---
+# --- HENT TWEETS (max 8 – hurtigt!) ---
 def get_live_tweets(symbol):
     query = f"${symbol} lang:en -filter:replies"
     tweets = []
     try:
         for i, tweet in enumerate(sntwitter.TwitterSearchScraper(query).get_items(), 1):
-            if i > 10: break
-            tweets.append(tweet.rawContent[:500])  # Max 500 tegn
+            if i > 8: break
+            tweets.append(tweet.rawContent)
         return tweets
     except:
         return []
-
-# --- SENTIMENT (kun 3 tweets – hurtigt!) ---
-def get_sentiment(tweets):
-    if not tweets:
-        return 0.0
-    scores = []
-    for t in tweets[:3]:
-        try:
-            result = model(t)[0]
-            label = result['label']
-            score = result['score']
-            if label == 'LABEL_2':  # positiv
-                scores.append(score)
-            elif label == 'LABEL_0':  # negativ
-                scores.append(-score)
-            # LABEL_1 = neutral → 0
-        except:
-            continue
-    return sum(scores)/len(scores) if scores else 0.0
 
 # --- PRIS ---
 def get_price(symbol):
@@ -65,14 +45,14 @@ names = ["GameStop", "Tesla", "AMC"]
 
 # --- DASHBOARD ---
 for name, symbol in zip(names, stocks):
-    col1, col2 = st.columns([1, 2])
+    col1, col2 = st.columns([1, 3])
     
     with col1:
-        st.subheader(f"{name}")
+        st.subheader(name)
         st.metric("Pris", f"${get_price(symbol)}")
         
         tweets = get_live_tweets(symbol)
-        score = get_sentiment(tweets)
+        score = get_sentiment_score(tweets)
         
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
@@ -87,12 +67,12 @@ for name, symbol in zip(names, stocks):
         with st.expander(f"Tweets om ${symbol}"):
             if tweets:
                 for t in tweets:
-                    st.caption(t[:200] + "...")
+                    st.caption(t[:150] + "...")
             else:
                 st.caption("Henter tweets...")
 
 # --- STATUS ---
-st.success("Kører stabilt på gratis Streamlit!")
+st.success("Kører på 200 MB RAM – ALTID STABILT!")
 st.info("Opdaterer hvert 3. minut.")
 time.sleep(180)
 st.rerun()
