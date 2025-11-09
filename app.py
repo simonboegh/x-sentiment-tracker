@@ -1,7 +1,7 @@
 import time
 import streamlit as st
 import plotly.graph_objects as go
-from transformers import pipeline
+from transformers.pipelines import pipeline
 from pmaw import PushshiftAPI
 
 # --- KONFIG ---
