@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 # ------------------- PARAMETRE -------------------
 
 MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
-RAW_COMMENT_LIMIT = 3000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
+RAW_COMMENT_LIMIT = 30000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
 
 # Udvidede keywords pr. aktie (uppercased)
 COMPANY_KEYWORDS = {
