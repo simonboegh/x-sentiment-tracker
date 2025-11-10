@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 # ------------------- PARAMETRE -------------------
 
-MAX_SUBMISSIONS = 25      # hvor mange WSB-tråde pr. aktie
 MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
+RAW_COMMENT_LIMIT = 1000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
 
 # ------------------- KONFIG & TITEL -------------------
 
@@ -52,15 +52,16 @@ def score_to_text(score_100: int) -> str:
     else:
         return "meget bearish"
 
-# ------------------- HENT & ANALYSER KOMMENTARER -------------------
+# ------------------- HENT & ANALYSER KOMMENTARER (LIVE STREAM) -------------------
 
-@st.cache_data(ttl=600)  # cache 10 minutter
+@st.cache_data(ttl=300)  # cache 5 minutter
 def get_reddit_sentiment(symbol: str):
     reddit = get_reddit_client()
     subreddit = reddit.subreddit("wallstreetbets")
 
+    symbol_up = symbol.upper()
     comments = []
-    posts_used = 0
+    posts_ids = set()
     fetch_time = datetime.now(timezone.utc)
 
     blocked_phrases = [
@@ -72,37 +73,40 @@ def get_reddit_sentiment(symbol: str):
     ]
 
     try:
-        # 1) Find op til MAX_SUBMISSIONS tråde der nævner symbolet
-        query = f'"${symbol}" OR "{symbol}"'
-        for submission in subreddit.search(query, sort="new", limit=MAX_SUBMISSIONS):
-            posts_used += 1
-            submission.comments.replace_more(limit=0)
-            for c in submission.comments.list():
-                text = getattr(c, "body", "")
+        # 1) Gå igennem de nyeste kommentarer i WSB
+        for c in subreddit.comments(limit=RAW_COMMENT_LIMIT):
+            try:
+                text = c.body
+            except Exception:
+                continue
 
-                # Grundfiltrering
-                if len(text) < 20 or len(text) > 800:
-                    continue
-                if any(bad in text for bad in blocked_phrases):
-                    continue
+            # Filtrér junk
+            if len(text) < 20 or len(text) > 800:
+                continue
+            if any(bad in text for bad in blocked_phrases):
+                continue
 
-                # Kræv at kommentaren faktisk nævner symbolet (case-insensitive)
-                t_upper = text.upper()
-                if symbol.upper() not in t_upper and f"${symbol.upper()}" not in t_upper:
-                    continue
+            t_upper = text.upper()
+            # Kun kommentarer der nævner symbolet (f.eks. TSLA eller $TSLA)
+            if symbol_up not in t_upper and f"${symbol_up}" not in t_upper:
+                continue
 
-                comments.append(text)
-                if len(comments) >= MAX_COMMENTS:
-                    break
+            comments.append(text)
+            try:
+                posts_ids.add(c.submission.id)
+            except Exception:
+                pass
+
             if len(comments) >= MAX_COMMENTS:
                 break
 
         raw_comments_count = len(comments)
+        posts_used = len(posts_ids)
 
         if raw_comments_count == 0:
             return (
-                0, "Ingen relevante kommentarer fundet lige nu", None, None,
-                0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+                0, "Ingen relevante kommentarer fundet blandt de nyeste WSB-kommentarer",
+                None, None, 0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
             )
 
         analyzed = []
@@ -118,6 +122,7 @@ def get_reddit_sentiment(symbol: str):
                     sentiment_word = "Bullish"
                 elif label == "negative":
                     sentiment_word = "Bearish"
+                    # FinBERT kalder alt andet "Neutral"
                 else:
                     sentiment_word = "Neutral"
 
@@ -127,8 +132,8 @@ def get_reddit_sentiment(symbol: str):
 
         if not analyzed:
             return (
-                0, "Kunne ikke analysere kommentarer lige nu", None, None,
-                0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+                0, "Kunne ikke analysere kommentarer lige nu",
+                None, None, 0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
             )
 
         # 3) Tæl bullish / bearish / neutral
@@ -142,7 +147,7 @@ def get_reddit_sentiment(symbol: str):
         else:
             score_100 = 0
 
-        # 4) Find bedste bullish og bedste bearish eksempel (højeste sikkerhed)
+        # 4) Find bedste bullish og bedste bearish eksempel
         bull_candidates = [item for item in analyzed if item[1] == "Bullish"]
         bear_candidates = [item for item in analyzed if item[1] == "Bearish"]
 
@@ -165,8 +170,8 @@ def get_reddit_sentiment(symbol: str):
 
     except Exception as e:
         return (
-            0, f"Reddit fejl: {str(e)[:120]}", None, None,
-            0, 0, 0, 0, posts_used, len(comments), fetch_time
+            0, f"Reddit fejl: {str(e)[:120]}",
+            None, None, 0, 0, 0, 0, len(posts_ids), len(comments), fetch_time
         )
 
 # ------------------- AKTIER I DASHBOARD -------------------
@@ -186,7 +191,7 @@ progress.empty()
 
 # ------------------- RAD 1: 3 GAUGES PÅ STRIBE -------------------
 
-st.subheader("WallStreetBets-sentiment (Reddit-kommentarer)")
+st.subheader("WallStreetBets-sentiment (nyeste Reddit-kommentarer)")
 
 cols = st.columns(3)
 
@@ -239,8 +244,11 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
             last_updated = fetch_time.strftime("%Y-%m-%d %H:%M UTC")
             st.caption(
                 f"Sidst opdateret: **{last_updated}** · "
-                f"{n_total} analyserede kommentarer (ud af {raw_comments_count}) "
-                f"fra {posts_used} WSB-tråde – 🐂 {n_bull} / 🐻 {n_bear} / 😶 {n_neutral}."
+                f"{n_total} analyserede kommentarer (ud af {raw_comments_count} relevante) "
+                f"fra {posts_used} forskellige WSB-tråde."
+            )
+            st.caption(
+                f"Fordeling: 🐂 {n_bull} bullish · 🐻 {n_bear} bearish · 😶 {n_neutral} neutrale."
             )
 
 # ------------------- RAD 2: EKSEMPLER PÅ KOMMENTARER -------------------
@@ -287,7 +295,7 @@ for name, symbol in zip(names, stocks):
 
 st.success("LIVE Reddit + AI kører 🚀")
 st.info(
-    f"Scoren bygger på op til {MAX_COMMENTS} relevante kommentarer pr. aktie "
-    f"fra maksimalt {MAX_SUBMISSIONS} nye WSB-tråde. Data caches i 10 minutter.\n"
-    "Brug knappen **'Opdater data nu'** øverst for at tvinge en frisk hentning."
+    f"Scoren bygger på op til {MAX_COMMENTS} relevante kommentarer pr. aktie, "
+    f"fundet blandt de {RAW_COMMENT_LIMIT} nyeste kommentarer i r/WallStreetBets.\n"
+    "Data caches i 5 minutter – brug knappen **'Opdater data nu'** for at tvinge en frisk hentning."
 )
