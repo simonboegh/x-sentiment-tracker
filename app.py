@@ -7,7 +7,28 @@ from datetime import datetime, timezone
 # ------------------- PARAMETRE -------------------
 
 MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
-RAW_COMMENT_LIMIT = 1000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
+RAW_COMMENT_LIMIT = 3000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
+
+# Udvidede keywords pr. aktie (uppercased)
+COMPANY_KEYWORDS = {
+    "TSLA": [
+        "TSLA", "$TSLA",
+        "TESLA",
+        "ELON", "MUSK", "ELON MUSK",
+        "TSLAQ",
+    ],
+    "PLTR": [
+        "PLTR", "$PLTR",
+        "PALANTIR",
+        "KARP", "ALEX KARP",
+    ],
+    "SPY": [
+        "SPY", "$SPY",
+        "SP500", "SP 500",
+        "S&P500", "S&P 500",
+        "SPX",  # mange bruger SPX når de mener S&P
+    ],
+}
 
 # ------------------- KONFIG & TITEL -------------------
 
@@ -59,7 +80,9 @@ def get_reddit_sentiment(symbol: str):
     reddit = get_reddit_client()
     subreddit = reddit.subreddit("wallstreetbets")
 
-    symbol_up = symbol.upper()
+    sym_up = symbol.upper()
+    keywords = COMPANY_KEYWORDS.get(sym_up, [sym_up, f"${sym_up}"])
+
     comments = []
     posts_ids = set()
     fetch_time = datetime.now(timezone.utc)
@@ -81,14 +104,14 @@ def get_reddit_sentiment(symbol: str):
                 continue
 
             # Filtrér junk
-            if len(text) < 20 or len(text) > 800:
+            if len(text) < 10 or len(text) > 800:
                 continue
             if any(bad in text for bad in blocked_phrases):
                 continue
 
             t_upper = text.upper()
-            # Kun kommentarer der nævner symbolet (f.eks. TSLA eller $TSLA)
-            if symbol_up not in t_upper and f"${symbol_up}" not in t_upper:
+            # Kun kommentarer der nævner et af vores keywords
+            if not any(kw in t_upper for kw in keywords):
                 continue
 
             comments.append(text)
@@ -122,7 +145,6 @@ def get_reddit_sentiment(symbol: str):
                     sentiment_word = "Bullish"
                 elif label == "negative":
                     sentiment_word = "Bearish"
-                    # FinBERT kalder alt andet "Neutral"
                 else:
                     sentiment_word = "Neutral"
 
@@ -245,7 +267,7 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
             st.caption(
                 f"Sidst opdateret: **{last_updated}** · "
                 f"{n_total} analyserede kommentarer (ud af {raw_comments_count} relevante) "
-                f"fra {posts_used} forskellige WSB-tråde."
+                f"fundet blandt de {RAW_COMMENT_LIMIT} nyeste WSB-kommentarer."
             )
             st.caption(
                 f"Fordeling: 🐂 {n_bull} bullish · 🐻 {n_bear} bearish · 😶 {n_neutral} neutrale."
