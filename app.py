@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 
 # ------------------- PARAMETRE -------------------
 
-MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
-RAW_COMMENT_LIMIT = 30000  # hvor mange nyeste WSB-kommentarer vi gennemsøger
+MAX_COMMENTS = 200        # max kommentarer vi analyserer pr. aktie
+MAX_POSTS_SCAN = 400      # hvor mange af de nyeste WSB-opslag vi tjekker titlen på
 
-# Udvidede keywords pr. aktie (uppercased)
+# Udvidede keywords pr. aktie (uppercased) – bruges på TITLER
 COMPANY_KEYWORDS = {
     "TSLA": [
         "TSLA", "$TSLA",
@@ -26,7 +26,7 @@ COMPANY_KEYWORDS = {
         "SPY", "$SPY",
         "SP500", "SP 500",
         "S&P500", "S&P 500",
-        "SPX",  # mange bruger SPX når de mener S&P
+        "SPX",
     ],
 }
 
@@ -73,7 +73,7 @@ def score_to_text(score_100: int) -> str:
     else:
         return "meget bearish"
 
-# ------------------- HENT & ANALYSER KOMMENTARER (LIVE STREAM) -------------------
+# ------------------- HENT & ANALYSER KOMMENTARER -------------------
 
 @st.cache_data(ttl=300)  # cache 5 minutter
 def get_reddit_sentiment(symbol: str):
@@ -84,7 +84,7 @@ def get_reddit_sentiment(symbol: str):
     keywords = COMPANY_KEYWORDS.get(sym_up, [sym_up, f"${sym_up}"])
 
     comments = []
-    posts_ids = set()
+    posts_used_ids = set()
     fetch_time = datetime.now(timezone.utc)
 
     blocked_phrases = [
@@ -96,45 +96,50 @@ def get_reddit_sentiment(symbol: str):
     ]
 
     try:
-        # 1) Gå igennem de nyeste kommentarer i WSB
-        for c in subreddit.comments(limit=RAW_COMMENT_LIMIT):
-            try:
-                text = c.body
-            except Exception:
+        # 1) Gå igennem de nyeste WSB-opslag (ikke søgeindeks)
+        for submission in subreddit.new(limit=MAX_POSTS_SCAN):
+            title_up = submission.title.upper()
+            # Kun tråde hvor titlen matcher et keyword
+            if not any(kw in title_up for kw in keywords):
                 continue
 
-            # Filtrér junk
-            if len(text) < 10 or len(text) > 800:
-                continue
-            if any(bad in text for bad in blocked_phrases):
-                continue
+            posts_used_ids.add(submission.id)
 
-            t_upper = text.upper()
-            # Kun kommentarer der nævner et af vores keywords
-            if not any(kw in t_upper for kw in keywords):
-                continue
+            # Hent alle kommentarer i den tråd
+            submission.comments.replace_more(limit=0)
+            for c in submission.comments.list():
+                try:
+                    text = c.body
+                except Exception:
+                    continue
 
-            comments.append(text)
-            try:
-                posts_ids.add(c.submission.id)
-            except Exception:
-                pass
+                # Filtrér tydeligt junk
+                if len(text) < 10 or len(text) > 800:
+                    continue
+                if any(bad in text for bad in blocked_phrases):
+                    continue
 
+                # Her kræver vi IKKE keywords i selve kommentaren –
+                # tråden er allerede om aktien, så vi tager samtalen med.
+                comments.append(text)
+
+                if len(comments) >= MAX_COMMENTS:
+                    break
             if len(comments) >= MAX_COMMENTS:
                 break
 
         raw_comments_count = len(comments)
-        posts_used = len(posts_ids)
+        posts_used = len(posts_used_ids)
 
         if raw_comments_count == 0:
             return (
-                0, "Ingen relevante kommentarer fundet blandt de nyeste WSB-kommentarer",
+                0, "Ingen kommentarer fundet i nylige WSB-opslag om denne aktie",
                 None, None, 0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
             )
 
         analyzed = []
 
-        # 2) Kør FinBERT på ALLE relevante kommentarer
+        # 2) Kør FinBERT på ALLE kommentarer i de valgte tråde
         for text in comments:
             try:
                 result = ai(text)[0]
@@ -193,7 +198,7 @@ def get_reddit_sentiment(symbol: str):
     except Exception as e:
         return (
             0, f"Reddit fejl: {str(e)[:120]}",
-            None, None, 0, 0, 0, 0, len(posts_ids), len(comments), fetch_time
+            None, None, 0, 0, 0, 0, len(posts_used_ids), len(comments), fetch_time
         )
 
 # ------------------- AKTIER I DASHBOARD -------------------
@@ -213,7 +218,7 @@ progress.empty()
 
 # ------------------- RAD 1: 3 GAUGES PÅ STRIBE -------------------
 
-st.subheader("WallStreetBets-sentiment (nyeste Reddit-kommentarer)")
+st.subheader("WallStreetBets-sentiment (nyeste tråde om aktien)")
 
 cols = st.columns(3)
 
@@ -266,8 +271,9 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
             last_updated = fetch_time.strftime("%Y-%m-%d %H:%M UTC")
             st.caption(
                 f"Sidst opdateret: **{last_updated}** · "
-                f"{n_total} analyserede kommentarer (ud af {raw_comments_count} relevante) "
-                f"fundet blandt de {RAW_COMMENT_LIMIT} nyeste WSB-kommentarer."
+                f"{n_total} analyserede kommentarer (ud af {raw_comments_count}) "
+                f"fra **{posts_used} nylige WSB-opslag**, hvor titlen nævner aktien "
+                f"(tjekket blandt de {MAX_POSTS_SCAN} nyeste opslag)."
             )
             st.caption(
                 f"Fordeling: 🐂 {n_bull} bullish · 🐻 {n_bear} bearish · 😶 {n_neutral} neutrale."
@@ -317,7 +323,7 @@ for name, symbol in zip(names, stocks):
 
 st.success("LIVE Reddit + AI kører 🚀")
 st.info(
-    f"Scoren bygger på op til {MAX_COMMENTS} relevante kommentarer pr. aktie, "
-    f"fundet blandt de {RAW_COMMENT_LIMIT} nyeste kommentarer i r/WallStreetBets.\n"
+    f"Scoren bygger på kommentarer i nylige WSB-opslag, hvor titlen matcher dine nøgleord "
+    f"(op til {MAX_COMMENTS} kommentarer pr. aktie, fundet blandt de {MAX_POSTS_SCAN} nyeste opslag).\n"
     "Data caches i 5 minutter – brug knappen **'Opdater data nu'** for at tvinge en frisk hentning."
 )
