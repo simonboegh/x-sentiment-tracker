@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from transformers.pipelines import pipeline
 import praw
+from datetime import datetime, timezone
 
 # ------------------- PARAMETRE -------------------
 
@@ -13,6 +14,11 @@ MAX_COMMENTS = 200        # max relevante kommentarer pr. aktie
 st.set_page_config(page_title="Reddit AI", layout="wide")
 st.title("AI Reddit Sentiment")
 st.markdown("**FinBERT analyserer live kommentarer fra *r/WallStreetBets***")
+
+# Manuelt refresh af cache
+if st.button("🔄 Opdater data nu"):
+    st.cache_data.clear()
+    st.experimental_rerun()
 
 # ------------------- AI-MODEL (FinBERT) -------------------
 
@@ -55,8 +61,8 @@ def get_reddit_sentiment(symbol: str):
 
     comments = []
     posts_used = 0
+    fetch_time = datetime.now(timezone.utc)
 
-    # Tekststumper vi vil filtrere væk (rapporter, auto-bots osv.)
     blocked_phrases = [
         "User Report",
         "Total Submissions",
@@ -94,7 +100,10 @@ def get_reddit_sentiment(symbol: str):
         raw_comments_count = len(comments)
 
         if raw_comments_count == 0:
-            return 0, "Ingen relevante kommentarer fundet lige nu", None, None, 0, 0, 0, 0, posts_used, raw_comments_count
+            return (
+                0, "Ingen relevante kommentarer fundet lige nu", None, None,
+                0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+            )
 
         analyzed = []
 
@@ -117,7 +126,10 @@ def get_reddit_sentiment(symbol: str):
                 continue
 
         if not analyzed:
-            return 0, "Kunne ikke analysere kommentarer lige nu", None, None, 0, 0, 0, 0, posts_used, raw_comments_count
+            return (
+                0, "Kunne ikke analysere kommentarer lige nu", None, None,
+                0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+            )
 
         # 3) Tæl bullish / bearish / neutral
         n_bull = sum(1 for _, s, _ in analyzed if s == "Bullish")
@@ -148,20 +160,29 @@ def get_reddit_sentiment(symbol: str):
             n_neutral,
             posts_used,
             raw_comments_count,
+            fetch_time,
         )
 
     except Exception as e:
-        return 0, f"Reddit fejl: {str(e)[:120]}", None, None, 0, 0, 0, 0, posts_used, len(comments)
+        return (
+            0, f"Reddit fejl: {str(e)[:120]}", None, None,
+            0, 0, 0, 0, posts_used, len(comments), fetch_time
+        )
 
 # ------------------- AKTIER I DASHBOARD -------------------
 
 stocks = ["TSLA", "PLTR", "SPY"]
 names = ["Tesla", "Palantir", "S&P 500 (SPY)"]
 
-# Hent data til alle aktier én gang
+# Hent data til alle aktier med progress bar
 results = {}
-for symbol in stocks:
+progress = st.progress(0, text="Indlæser data fra Reddit...")
+
+for i, symbol in enumerate(stocks):
     results[symbol] = get_reddit_sentiment(symbol)
+    progress.progress((i + 1) / len(stocks), text=f"Indlæser {symbol} ({i+1}/{len(stocks)})")
+
+progress.empty()
 
 # ------------------- RAD 1: 3 GAUGES PÅ STRIBE -------------------
 
@@ -181,6 +202,7 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
         n_neutral,
         posts_used,
         raw_comments_count,
+        fetch_time,
     ) = results[symbol]
 
     with col:
@@ -214,8 +236,10 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
             )
             st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
 
+            last_updated = fetch_time.strftime("%Y-%m-%d %H:%M UTC")
             st.caption(
-                f"{n_total} kommentarer (ud af {raw_comments_count} relevante) "
+                f"Sidst opdateret: **{last_updated}** · "
+                f"{n_total} analyserede kommentarer (ud af {raw_comments_count}) "
                 f"fra {posts_used} WSB-tråde – 🐂 {n_bull} / 🐻 {n_bear} / 😶 {n_neutral}."
             )
 
@@ -235,6 +259,7 @@ for name, symbol in zip(names, stocks):
         n_neutral,
         posts_used,
         raw_comments_count,
+        fetch_time,
     ) = results[symbol]
 
     with st.expander(f"{name} (`{symbol}`)"):
@@ -263,5 +288,6 @@ for name, symbol in zip(names, stocks):
 st.success("LIVE Reddit + AI kører 🚀")
 st.info(
     f"Scoren bygger på op til {MAX_COMMENTS} relevante kommentarer pr. aktie "
-    f"fra maksimalt {MAX_SUBMISSIONS} nye WSB-tråde. Data caches i 10 minutter."
+    f"fra maksimalt {MAX_SUBMISSIONS} nye WSB-tråde. Data caches i 10 minutter.\n"
+    "Brug knappen **'Opdater data nu'** øverst for at tvinge en frisk hentning."
 )
