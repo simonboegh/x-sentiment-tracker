@@ -380,13 +380,3 @@ for name, symbol in zip(names, stocks):
             st.write(text)
         else:
             st.info("Ingen tydeligt bearish kommentar fundet lige nu.")
-
-# ------------------- STATUS / DISCLAIMER -------------------
-
-st.success("LIVE Reddit + AI kører 🚀")
-st.info(
-    f"Scoren bygger på kommentarer i nylige WSB-opslag, hvor titlen matcher dine nøgleord "
-    f"(op til {MAX_COMMENTS} kommentarer pr. aktie, fundet blandt de {MAX_POSTS_SCAN} nyeste opslag).\n\n"
-    "Denne app er kun til informations- og underholdningsformål og udgør **ikke** "
-    "finansiel rådgivning eller en anbefaling om at købe eller sælge værdipapirer."
-)
