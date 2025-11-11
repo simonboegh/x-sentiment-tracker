@@ -3,13 +3,15 @@ import plotly.graph_objects as go
 from transformers.pipelines import pipeline
 import praw
 from datetime import datetime, timezone
+import requests
 
 # ------------------- PARAMETRE -------------------
 
-MAX_COMMENTS = 200        # max kommentarer vi analyserer pr. aktie
+MAX_COMMENTS = 200        # max kommentarer vi analyserer pr. aktie (Reddit)
 MAX_POSTS_SCAN = 400      # hvor mange af de nyeste WSB-opslag vi tjekker titlen på
+NEWS_API_URL = "https://newsapi.org/v2/everything"
 
-# Udvidede keywords pr. aktie (uppercased) – bruges på TITLER
+# Udvidede keywords pr. aktie (uppercased) – bruges både til Reddit TITLER og til nyhedssøgning
 COMPANY_KEYWORDS = {
     "TSLA": [
         "TSLA", "$TSLA",
@@ -31,46 +33,75 @@ COMPANY_KEYWORDS = {
 }
 
 OM_METODEN_TEKST = """
-**Hvad sker der bag kulissen?**
+**Kort fortalt**
 
-- Appen bruger en sproglig AI-model, **FinBERT**, som er trænet på finansielt sprog
-  (fx nyheder, earnings-rapporter og analytiker-kommentarer).
-- For hver kommentar fra *r/WallStreetBets* laver modellen et gæt på, om tonen er  
+- Appen måler **stemningen omkring udvalgte aktier** to steder:
+  1. I **Reddit-kommentarer** fra *r/WallStreetBets*.
+  2. I **klassiske finansnyheder** (via et nyheds-API).
+- Begge steder bruger jeg den samme sproglige AI-model, **FinBERT**, som er trænet på
+  finansielt sprog (earnings, nyheder, analytikernoter osv.).
+- For hver tekst (kommentar eller artikel) vurderer modellen, om tonen er  
   **positiv (bullish), negativ (bearish) eller neutral**.
-- Jeg tæller derefter, hvor mange kommentarer der er bullish vs. bearish, og beregner
-  en netto-score:
+- Derefter laves en samlet **sentimentscore fra -100 til +100** for hver aktie:
 
-> **Score = -100** betyder kun bearish kommentarer  
-> **Score = 0** betyder lige mange bullish og bearish  
-> **Score = +100** betyder kun bullish
+> **Score = -100** → kun bearish  
+> **Score = 0** → lige mange bullish og bearish  
+> **Score = +100** → kun bullish
 
-Neutrale kommentarer tæller med i fordelingen, men påvirker ikke selve scoren.
+Neutrale tekster tæller med i fordelingen, men påvirker ikke selve scoren.
+
+---
+
+**Kilde 1: Reddit / r/WallStreetBets**
+
+- For hver aktie (fx TSLA) kigger jeg på de **nyeste opslag i r/WallStreetBets**, hvor
+  titlen matcher et sæt nøgleord, fx:
+
+  - `TSLA`, `TESLA`, `ELON`, `ELON MUSK` osv. for Tesla
+  - `PLTR`, `PALANTIR`, `KARP` osv. for Palantir
+  - `SPY`, `SP500`, `S&P500`, `SPX` osv. for S&P 500 (SPY)
+
+- For hvert sådant opslag hentes kommentarerne, renses let (fjern spam, meget korte eller
+  ekstremt lange tekster), og FinBERT vurderer dem som bullish/bearish/neutral.
+- På den måde får du et billede af **retail/WSB-stemningen** i de nyeste tråde om aktien.
+
+---
+
+**Kilde 2: Klassiske finansnyheder**
+
+- For den samme aktie hentes nyheder via et nyheds-API (NewsAPI), hvor der søges på
+  de **samme nøgleord** (fx `TSLA OR TESLA OR ELON MUSK`).
+- For hver artikel analyseres **titel + kort beskrivelse** med FinBERT, som igen
+  klassificerer tonen som bullish/bearish/neutral.
+- Dermed får du en separat sentimentscore for **klassiske medier / finansnyheder**.
+
+---
 
 **Vigtige begrænsninger**
 
 - FinBERT er trænet på **seriøst finanssprog**, ikke på memes, slang og ironi fra
   *r/WallStreetBets*.  
-- Det betyder, at modellen nogle gange kan misforstå fx sarkasme, interne jokes
-  eller emojis.
-- Resultatet skal derfor ses som et **groft stemningsbillede**, ikke som en
-  præcis sandhed om markedet eller en handelsanbefaling.
+  Derfor kan modellen nogle gange misforstå sarkasme, interne jokes eller emojis.
+- Nyheds-API’et leverer artikler fra mange forskellige kilder (ikke alle er lige dybt
+  finansielle), så nogle artikler er mere “markedstunge” end andre.
+- Resultaterne skal derfor ses som et **groft stemningsbillede**, ikke som en præcis
+  sandhed om markedet eller som investeringsrådgivning.
 
-Kort sagt: Appen forsøger at oversætte WSB-kommentarer til et enkelt tal, der
-siger noget om, om stemningen i de nyeste tråde om aktien mest hælder til
-bullish eller bearish – men med de naturlige fejl og begrænsninger, der følger
-med automatiseret sprogforståelse.
+Kort sagt: Appen forsøger at oversætte både Reddit-snak og nyhedsflow til simple
+tal, der viser om stemningen mest hælder til bullish eller bearish på tværs af
+sociale medier og traditionelle medier.
 """
 
 # ------------------- KONFIG & TITEL -------------------
 
-st.set_page_config(page_title="Reddit AI", layout="wide")
-st.title("AI Reddit Sentiment")
-st.markdown("**FinBERT analyserer live kommentarer fra *r/WallStreetBets***")
+st.set_page_config(page_title="Reddit + News AI Sentiment", layout="wide")
+st.title("AI Sentiment: WallStreetBets vs. Finansnyheder")
+st.markdown("**FinBERT analyserer både *r/WallStreetBets*-kommentarer og klassiske finansnyheder.**")
 
 # Manuelt refresh af cache
 if st.button("🔄 Opdater data nu"):
     st.cache_data.clear()
-    st.rerun()  # erstatter st.experimental_rerun()
+    st.rerun()  # ny Streamlit-metode
 
 with st.expander("Hvordan virker AI-sentimentet?"):
     st.markdown(OM_METODEN_TEKST)
@@ -107,7 +138,7 @@ def score_to_text(score_100: int) -> str:
     else:
         return "meget bearish"
 
-# ------------------- HENT & ANALYSER KOMMENTARER -------------------
+# ------------------- HENT & ANALYSER KOMMENTARER (REDDIT) -------------------
 
 @st.cache_data(ttl=300)  # cache 5 minutter
 def get_reddit_sentiment(symbol: str):
@@ -261,24 +292,166 @@ def get_reddit_sentiment(symbol: str):
             fetch_time,
         )
 
+# ------------------- HENT & ANALYSER NYHEDER -------------------
+
+@st.cache_data(ttl=600)  # cache 10 minutter
+def get_news_sentiment(symbol: str):
+    """Bruger FinBERT til at måle sentiment i finansnyheder om en given aktie."""
+    fetch_time = datetime.now(timezone.utc)
+    sym_up = symbol.upper()
+    keywords = COMPANY_KEYWORDS.get(sym_up, [sym_up])
+
+    # Brug de samme keywords som til Reddit, men uden '$', til nyhedssøgningen
+    cleaned_keywords = []
+    for kw in keywords:
+        kw_clean = kw.replace("$", "").strip()
+        if kw_clean:
+            cleaned_keywords.append(kw_clean)
+
+    # Byg query som "TSLA OR TESLA OR ELON MUSK"
+    if cleaned_keywords:
+        q = " OR ".join(sorted(set(cleaned_keywords)))
+    else:
+        q = symbol
+
+    try:
+        # 1) Hent nyheder fra API
+        params = {
+            "q": q,
+            "language": "en",
+            "sortBy": "publishedAt",
+            "pageSize": 30,
+            "apiKey": st.secrets["news"]["api_key"],
+        }
+        r = requests.get(NEWS_API_URL, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        articles = data.get("articles", [])
+
+        if not articles:
+            return (
+                0,
+                f"Ingen nyheder fundet for {symbol} lige nu",
+                None,
+                None,
+                0,
+                0,
+                0,
+                0,
+                0,
+                fetch_time,
+            )
+
+        analyzed = []  # (headline, url, sentiment_word, conf)
+
+        # 2) Kør FinBERT på title + description
+        for art in articles:
+            title = art.get("title") or ""
+            desc = art.get("description") or ""
+            url = art.get("url") or ""
+
+            text = f"{title}. {desc}".strip()
+            if len(text) < 20:
+                continue
+
+            try:
+                result = ai(text)[0]
+                label = result["label"].lower()  # "positive", "negative", "neutral"
+                conf = result["score"]
+
+                if label == "positive":
+                    sentiment_word = "Bullish"
+                elif label == "negative":
+                    sentiment_word = "Bearish"
+                else:
+                    sentiment_word = "Neutral"
+
+                analyzed.append((title, url, sentiment_word, conf))
+            except Exception:
+                continue
+
+        if not analyzed:
+            return (
+                0,
+                "Kunne ikke analysere nyhedsartikler lige nu",
+                None,
+                None,
+                0,
+                0,
+                0,
+                0,
+                len(articles),
+                fetch_time,
+            )
+
+        # 3) Tæl bullish / bearish / neutral
+        n_bull = sum(1 for _, _, s, _ in analyzed if s == "Bullish")
+        n_bear = sum(1 for _, _, s, _ in analyzed if s == "Bearish")
+        n_neutral = sum(1 for _, _, s, _ in analyzed if s == "Neutral")
+        n_total = n_bull + n_bear + n_neutral
+
+        if n_bull + n_bear > 0:
+            score_100 = round(100 * (n_bull - n_bear) / (n_bull + n_bear))
+        else:
+            score_100 = 0
+
+        # 4) Find bedste bullish og bearish artikel
+        bull_candidates = [item for item in analyzed if item[2] == "Bullish"]
+        bear_candidates = [item for item in analyzed if item[2] == "Bearish"]
+
+        bull_example = max(bull_candidates, key=lambda x: x[3]) if bull_candidates else None
+        bear_example = max(bear_candidates, key=lambda x: x[3]) if bear_candidates else None
+
+        return (
+            score_100,
+            None,
+            bull_example,
+            bear_example,
+            n_total,
+            n_bull,
+            n_bear,
+            n_neutral,
+            len(articles),
+            fetch_time,
+        )
+
+    except Exception as e:
+        return (
+            0,
+            f"Nyheds-API fejl: {str(e)[:120]}",
+            None,
+            None,
+            0,
+            0,
+            0,
+            0,
+            0,
+            fetch_time,
+        )
+
 # ------------------- AKTIER I DASHBOARD -------------------
 
 stocks = ["TSLA", "PLTR", "SPY"]
 names = ["Tesla", "Palantir", "S&P 500 (SPY)"]
 
-# Hent data til alle aktier med progress bar
-results = {}
-progress = st.progress(0, text="Indlæser data fra Reddit...")
+# Hent Reddit-data til alle aktier med progress bar
+results_reddit = {}
+progress = st.progress(0, text="Indlæser Reddit-data...")
 
 for i, symbol in enumerate(stocks):
-    results[symbol] = get_reddit_sentiment(symbol)
-    progress.progress((i + 1) / len(stocks), text=f"Indlæser {symbol} ({i+1}/{len(stocks)})")
+    results_reddit[symbol] = get_reddit_sentiment(symbol)
+    progress.progress((i + 1) / len(stocks), text=f"Indlæser Reddit for {symbol} ({i+1}/{len(stocks)})")
 
 progress.empty()
 
-# ------------------- RAD 1: 3 GAUGES PÅ STRIBE -------------------
+# Hent nyhedsdata til alle aktier
+results_news = {}
+for symbol in stocks:
+    results_news[symbol] = get_news_sentiment(symbol)
 
-st.subheader("WallStreetBets-sentiment (nyeste tråde om aktien)")
+# ------------------- RAD 1: REDDIT-SENTIMENT -------------------
+
+st.subheader("📊 WallStreetBets-sentiment (nyeste tråde om aktien)")
 
 cols = st.columns(3)
 
@@ -295,7 +468,7 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
         posts_used,
         raw_comments_count,
         fetch_time,
-    ) = results[symbol]
+    ) = results_reddit[symbol]
 
     with col:
         st.markdown(f"### {name} (`{symbol}`)")
@@ -313,7 +486,7 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
                 go.Indicator(
                     mode="gauge+number",
                     value=score_100,
-                    title={"text": "Netto-bullish sentiment"},
+                    title={"text": "WSB-sentiment"},
                     gauge={
                         "axis": {"range": [-100, 100]},
                         "bar": {
@@ -326,22 +499,80 @@ for col, (name, symbol) in zip(cols, zip(names, stocks)):
                     },
                 )
             )
-            st.plotly_chart(fig, width="stretch", key=f"gauge_{symbol}")
+            st.plotly_chart(fig, width="stretch", key=f"gauge_reddit_{symbol}")
 
             last_updated = fetch_time.strftime("%Y-%m-%d %H:%M UTC")
             st.caption(
                 f"Sidst opdateret: **{last_updated}** · "
                 f"{n_total} analyserede kommentarer (ud af {raw_comments_count}) "
-                f"fra **{posts_used} nylige WSB-opslag**, hvor titlen nævner aktien "
-                f"(tjekket blandt de {MAX_POSTS_SCAN} nyeste opslag)."
+                f"fra **{posts_used} nylige WSB-opslag**."
             )
             st.caption(
                 f"Fordeling: 🐂 {n_bull} bullish · 🐻 {n_bear} bearish · 😶 {n_neutral} neutrale."
             )
 
-# ------------------- RAD 2: EKSEMPLER PÅ KOMMENTARER -------------------
+# ------------------- RAD 2: NYHEDS-SENTIMENT -------------------
 
-st.subheader("Eksempler på kommentarer (AI-udvalgt)")
+st.subheader("📰 Finansnyheder-sentiment (klassiske medier)")
+
+cols_news = st.columns(3)
+
+for col, (name, symbol) in zip(cols_news, zip(names, stocks)):
+    (
+        news_score,
+        news_error,
+        news_bull_ex,
+        news_bear_ex,
+        news_n_total,
+        news_n_bull,
+        news_n_bear,
+        news_n_neutral,
+        news_n_articles,
+        news_fetch_time,
+    ) = results_news[symbol]
+
+    with col:
+        st.markdown(f"### {name} (`{symbol}`)")
+
+        if news_error:
+            st.info(news_error)
+            continue
+
+        sentiment_text = score_to_text(news_score)
+        st.markdown(
+            f"**Nyhedsflowet er {sentiment_text} på `{symbol}` lige nu.**  \n"
+            f"Score: **{news_score}** (−100 bearish, 0 neutral, +100 bullish)."
+        )
+
+        fig_news = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=news_score,
+                title={"text": "Nyheds-sentiment"},
+                gauge={
+                    "axis": {"range": [-100, 100]},
+                    "bar": {
+                        "color": "lime"
+                        if news_score > 10
+                        else "red"
+                        if news_score < -10
+                        else "gray"
+                    },
+                },
+            )
+        )
+        st.plotly_chart(fig_news, width="stretch", key=f"gauge_news_{symbol}")
+
+        last_updated_news = news_fetch_time.strftime("%Y-%m-%d %H:%M UTC")
+        st.caption(
+            f"Sidst opdateret: **{last_updated_news}** · "
+            f"{news_n_total} analyserede artikler (ud af {news_n_articles} hentet). "
+            f"Fordeling: 🐂 {news_n_bull} bullish · 🐻 {news_n_bear} bearish · 😶 {news_n_neutral} neutrale."
+        )
+
+# ------------------- RAD 3: EKSEMPLER FRA REDDIT -------------------
+
+st.subheader("💬 Eksempler på WSB-kommentarer (AI-udvalgt)")
 
 for name, symbol in zip(names, stocks):
     (
@@ -356,16 +587,16 @@ for name, symbol in zip(names, stocks):
         posts_used,
         raw_comments_count,
         fetch_time,
-    ) = results[symbol]
+    ) = results_reddit[symbol]
 
-    with st.expander(f"{name} (`{symbol}`)"):
+    with st.expander(f"{name} (`{symbol}`) – Reddit-kommentarer"):
         if error_msg:
             st.info(error_msg)
             continue
 
         if bull_ex:
             text, title, _, conf = bull_ex
-            st.markdown("#### 🐂 Bullish eksempel")
+            st.markdown("#### 🐂 Bullish kommentar")
             st.caption(f"Fra opslaget: *{title}*")
             st.caption(f"Model-sikkerhed: {conf:.2f}")
             st.write(text)
@@ -374,9 +605,52 @@ for name, symbol in zip(names, stocks):
         st.markdown("---")
         if bear_ex:
             text, title, _, conf = bear_ex
-            st.markdown("#### 🐻 Bearish eksempel")
+            st.markdown("#### 🐻 Bearish kommentar")
             st.caption(f"Fra opslaget: *{title}*")
             st.caption(f"Model-sikkerhed: {conf:.2f}")
             st.write(text)
         else:
             st.info("Ingen tydeligt bearish kommentar fundet lige nu.")
+
+# ------------------- RAD 4: EKSEMPLER FRA NYHEDER -------------------
+
+st.subheader("📑 Eksempler på nyhedsartikler (AI-udvalgt)")
+
+for name, symbol in zip(names, stocks):
+    (
+        news_score,
+        news_error,
+        news_bull_ex,
+        news_bear_ex,
+        news_n_total,
+        news_n_bull,
+        news_n_bear,
+        news_n_neutral,
+        news_n_articles,
+        news_fetch_time,
+    ) = results_news[symbol]
+
+    with st.expander(f"{name} (`{symbol}`) – nyheder"):
+        if news_error:
+            st.info(news_error)
+            continue
+
+        if news_bull_ex:
+            title, url, _, conf = news_bull_ex
+            st.markdown("#### 🐂 Bullish nyhed")
+            st.caption(f"Model-sikkerhed: {conf:.2f}")
+            st.write(title)
+            if url:
+                st.markdown(f"[Læs artikel]({url})")
+        else:
+            st.info("Ingen tydeligt bullish artikel fundet lige nu.")
+        st.markdown("---")
+        if news_bear_ex:
+            title, url, _, conf = news_bear_ex
+            st.markdown("#### 🐻 Bearish nyhed")
+            st.caption(f"Model-sikkerhed: {conf:.2f}")
+            st.write(title)
+            if url:
+                st.markdown(f"[Læs artikel]({url})")
+        else:
+            st.info("Ingen tydeligt bearish artikel fundet lige nu.")
