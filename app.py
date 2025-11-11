@@ -83,7 +83,7 @@ def get_reddit_sentiment(symbol: str):
     sym_up = symbol.upper()
     keywords = COMPANY_KEYWORDS.get(sym_up, [sym_up, f"${sym_up}"])
 
-    comments = []
+    comments = []          # liste af (text, title)
     posts_used_ids = set()
     fetch_time = datetime.now(timezone.utc)
 
@@ -119,9 +119,8 @@ def get_reddit_sentiment(symbol: str):
                 if any(bad in text for bad in blocked_phrases):
                     continue
 
-                # Her kræver vi IKKE keywords i selve kommentaren –
-                # tråden er allerede om aktien, så vi tager samtalen med.
-                comments.append(text)
+                # Vi kræver ikke keywords i kommentaren – tråden handler om aktien
+                comments.append((text, submission.title))
 
                 if len(comments) >= MAX_COMMENTS:
                     break
@@ -133,14 +132,23 @@ def get_reddit_sentiment(symbol: str):
 
         if raw_comments_count == 0:
             return (
-                0, "Ingen kommentarer fundet i nylige WSB-opslag om denne aktie",
-                None, None, 0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+                0,
+                "Ingen kommentarer fundet i nylige WSB-opslag om denne aktie",
+                None,
+                None,
+                0,
+                0,
+                0,
+                0,
+                posts_used,
+                raw_comments_count,
+                fetch_time,
             )
 
-        analyzed = []
+        analyzed = []  # (text, title, sentiment_word, conf)
 
         # 2) Kør FinBERT på ALLE kommentarer i de valgte tråde
-        for text in comments:
+        for text, title in comments:
             try:
                 result = ai(text)[0]
                 label = result["label"].lower()  # "positive", "negative", "neutral"
@@ -153,20 +161,29 @@ def get_reddit_sentiment(symbol: str):
                 else:
                     sentiment_word = "Neutral"
 
-                analyzed.append((text, sentiment_word, conf))
+                analyzed.append((text, title, sentiment_word, conf))
             except Exception:
                 continue
 
         if not analyzed:
             return (
-                0, "Kunne ikke analysere kommentarer lige nu",
-                None, None, 0, 0, 0, 0, posts_used, raw_comments_count, fetch_time
+                0,
+                "Kunne ikke analysere kommentarer lige nu",
+                None,
+                None,
+                0,
+                0,
+                0,
+                0,
+                posts_used,
+                raw_comments_count,
+                fetch_time,
             )
 
         # 3) Tæl bullish / bearish / neutral
-        n_bull = sum(1 for _, s, _ in analyzed if s == "Bullish")
-        n_bear = sum(1 for _, s, _ in analyzed if s == "Bearish")
-        n_neutral = sum(1 for _, s, _ in analyzed if s == "Neutral")
+        n_bull = sum(1 for _, _, s, _ in analyzed if s == "Bullish")
+        n_bear = sum(1 for _, _, s, _ in analyzed if s == "Bearish")
+        n_neutral = sum(1 for _, _, s, _ in analyzed if s == "Neutral")
         n_total = n_bull + n_bear + n_neutral
 
         if n_bull + n_bear > 0:
@@ -175,11 +192,11 @@ def get_reddit_sentiment(symbol: str):
             score_100 = 0
 
         # 4) Find bedste bullish og bedste bearish eksempel
-        bull_candidates = [item for item in analyzed if item[1] == "Bullish"]
-        bear_candidates = [item for item in analyzed if item[1] == "Bearish"]
+        bull_candidates = [item for item in analyzed if item[2] == "Bullish"]
+        bear_candidates = [item for item in analyzed if item[2] == "Bearish"]
 
-        bull_example = max(bull_candidates, key=lambda x: x[2]) if bull_candidates else None
-        bear_example = max(bear_candidates, key=lambda x: x[2]) if bear_candidates else None
+        bull_example = max(bull_candidates, key=lambda x: x[3]) if bull_candidates else None
+        bear_example = max(bear_candidates, key=lambda x: x[3]) if bear_candidates else None
 
         return (
             score_100,
@@ -197,8 +214,17 @@ def get_reddit_sentiment(symbol: str):
 
     except Exception as e:
         return (
-            0, f"Reddit fejl: {str(e)[:120]}",
-            None, None, 0, 0, 0, 0, len(posts_used_ids), len(comments), fetch_time
+            0,
+            f"Reddit fejl: {str(e)[:120]}",
+            None,
+            None,
+            0,
+            0,
+            0,
+            0,
+            len(posts_used_ids),
+            len(comments),
+            fetch_time,
         )
 
 # ------------------- AKTIER I DASHBOARD -------------------
@@ -304,16 +330,18 @@ for name, symbol in zip(names, stocks):
             continue
 
         if bull_ex:
-            text, _, conf = bull_ex
+            text, title, _, conf = bull_ex
             st.markdown("#### 🐂 Bullish eksempel")
+            st.caption(f"Fra opslaget: *{title}*")
             st.caption(f"Model-sikkerhed: {conf:.2f}")
             st.write(text)
         else:
             st.info("Ingen tydeligt bullish kommentar fundet lige nu.")
         st.markdown("---")
         if bear_ex:
-            text, _, conf = bear_ex
+            text, title, _, conf = bear_ex
             st.markdown("#### 🐻 Bearish eksempel")
+            st.caption(f"Fra opslaget: *{title}*")
             st.caption(f"Model-sikkerhed: {conf:.2f}")
             st.write(text)
         else:
