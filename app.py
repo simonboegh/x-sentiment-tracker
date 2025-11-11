@@ -30,6 +30,37 @@ COMPANY_KEYWORDS = {
     ],
 }
 
+OM_METODEN_TEKST = """
+**Hvad sker der bag kulissen?**
+
+- Appen bruger en sproglig AI-model, **FinBERT**, som er trænet på finansielt sprog
+  (fx nyheder, earnings-rapporter og analytiker-kommentarer).
+- For hver kommentar fra *r/WallStreetBets* laver modellen et gæt på, om tonen er  
+  **positiv (bullish), negativ (bearish) eller neutral**.
+- Jeg tæller derefter, hvor mange kommentarer der er bullish vs. bearish, og beregner
+  en netto-score:
+
+> **Score = -100** betyder kun bearish kommentarer  
+> **Score = 0** betyder lige mange bullish og bearish  
+> **Score = +100** betyder kun bullish
+
+Neutrale kommentarer tæller med i fordelingen, men påvirker ikke selve scoren.
+
+**Vigtige begrænsninger**
+
+- FinBERT er trænet på **seriøst finanssprog**, ikke på memes, slang og ironi fra
+  *r/WallStreetBets*.  
+- Det betyder, at modellen nogle gange kan misforstå fx sarkasme, interne jokes
+  eller emojis.
+- Resultatet skal derfor ses som et **groft stemningsbillede**, ikke som en
+  præcis sandhed om markedet eller en handelsanbefaling.
+
+Kort sagt: Appen forsøger at oversætte WSB-kommentarer til et enkelt tal, der
+siger noget om, om stemningen i de nyeste tråde om aktien mest hælder til
+bullish eller bearish – men med de naturlige fejl og begrænsninger, der følger
+med automatiseret sprogforståelse.
+"""
+
 # ------------------- KONFIG & TITEL -------------------
 
 st.set_page_config(page_title="Reddit AI", layout="wide")
@@ -39,7 +70,10 @@ st.markdown("**FinBERT analyserer live kommentarer fra *r/WallStreetBets***")
 # Manuelt refresh af cache
 if st.button("🔄 Opdater data nu"):
     st.cache_data.clear()
-    st.experimental_rerun()
+    st.rerun()  # erstatter st.experimental_rerun()
+
+with st.expander("Hvordan virker AI-sentimentet?"):
+    st.markdown(OM_METODEN_TEKST)
 
 # ------------------- AI-MODEL (FinBERT) -------------------
 
@@ -347,11 +381,12 @@ for name, symbol in zip(names, stocks):
         else:
             st.info("Ingen tydeligt bearish kommentar fundet lige nu.")
 
-# ------------------- STATUS -------------------
+# ------------------- STATUS / DISCLAIMER -------------------
 
 st.success("LIVE Reddit + AI kører 🚀")
 st.info(
     f"Scoren bygger på kommentarer i nylige WSB-opslag, hvor titlen matcher dine nøgleord "
-    f"(op til {MAX_COMMENTS} kommentarer pr. aktie, fundet blandt de {MAX_POSTS_SCAN} nyeste opslag).\n"
-    "Data caches i 5 minutter – brug knappen **'Opdater data nu'** for at tvinge en frisk hentning."
+    f"(op til {MAX_COMMENTS} kommentarer pr. aktie, fundet blandt de {MAX_POSTS_SCAN} nyeste opslag).\n\n"
+    "Denne app er kun til informations- og underholdningsformål og udgør **ikke** "
+    "finansiel rådgivning eller en anbefaling om at købe eller sælge værdipapirer."
 )
