@@ -11,7 +11,7 @@ MAX_COMMENTS = 200        # max kommentarer vi analyserer pr. aktie (Reddit)
 MAX_POSTS_SCAN = 400      # hvor mange af de nyeste WSB-opslag vi tjekker titlen på
 NEWS_API_URL = "https://newsapi.org/v2/everything"
 
-# Udvidede keywords pr. aktie (uppercased) – bruges både til Reddit TITLER og til nyhedssøgning
+# Udvidede keywords pr. aktie (uppercased) – bruges til Reddit TITLER
 COMPANY_KEYWORDS = {
     "TSLA": [
         "TSLA", "$TSLA",
@@ -31,6 +31,23 @@ COMPANY_KEYWORDS = {
         "SPX",
     ],
 }
+
+# Mere snævre søgeord til NYHEDER (kun det, der virkelig identificerer aktien)
+NEWS_MAIN_TERMS = {
+    "TSLA": ["TSLA", "TESLA", "TESLA INC"],
+    "PLTR": ["PLTR", "PALANTIR", "PALANTIR TECHNOLOGIES"],
+    "SPY": ["SPY", "S&P 500", "SP500", "S&P500"],
+}
+
+# Ord som typisk optræder i finansnyheder (bruges til at filtrere irrelevante artikler fra)
+FINANCE_WORDS = [
+    "STOCK", "SHARE", "SHARES", "EARNINGS", "RESULTS", "GUIDANCE",
+    "REVENUE", "PROFIT", "LOSS", "OUTLOOK", "FORECAST",
+    "ETF", "INDEX", "FUND",
+    "MARKET", "TRADER", "TRADING",
+    "OPTIONS", "CALL OPTION", "PUT OPTION", "DERIVATIVE",
+    "YIELD", "RATE", "VOLATILITY",
+]
 
 OM_METODEN_TEKST = """
 **Kort fortalt**
@@ -70,7 +87,9 @@ Neutrale tekster tæller med i fordelingen, men påvirker ikke selve scoren.
 **Kilde 2: Klassiske finansnyheder**
 
 - For den samme aktie hentes nyheder via et nyheds-API (NewsAPI), hvor der søges på
-  de **samme nøgleord** (fx `TSLA OR TESLA OR ELON MUSK`).
+  aktiens navn/ticker (fx `TSLA OR TESLA OR "TESLA INC"`).
+- Derudover frasorteres artikler, der **ikke ligner finansnyheder** – dvs. teksten skal
+  både indeholde aktien og nogle finans-ord som fx *stock, earnings, shares, ETF* osv.
 - For hver artikel analyseres **titel + kort beskrivelse** med FinBERT, som igen
   klassificerer tonen som bullish/bearish/neutral.
 - Dermed får du en separat sentimentscore for **klassiske medier / finansnyheder**.
@@ -83,7 +102,8 @@ Neutrale tekster tæller med i fordelingen, men påvirker ikke selve scoren.
   *r/WallStreetBets*.  
   Derfor kan modellen nogle gange misforstå sarkasme, interne jokes eller emojis.
 - Nyheds-API’et leverer artikler fra mange forskellige kilder (ikke alle er lige dybt
-  finansielle), så nogle artikler er mere “markedstunge” end andre.
+  finansielle), så nogle artikler er mere “markedstunge” end andre – filtrene forsøger
+  at fjerne de værste fejlskud, men kan ikke være perfekte.
 - Resultaterne skal derfor ses som et **groft stemningsbillede**, ikke som en præcis
   sandhed om markedet eller som investeringsrådgivning.
 
@@ -296,23 +316,14 @@ def get_reddit_sentiment(symbol: str):
 
 @st.cache_data(ttl=600)  # cache 10 minutter
 def get_news_sentiment(symbol: str):
-    """Bruger FinBERT til at måle sentiment i finansnyheder om en given aktie."""
+    """Bruger FinBERT til at måle sentiment i FINANSNYHEDER om en given aktie."""
     fetch_time = datetime.now(timezone.utc)
     sym_up = symbol.upper()
-    keywords = COMPANY_KEYWORDS.get(sym_up, [sym_up])
 
-    # Brug de samme keywords som til Reddit, men uden '$', til nyhedssøgningen
-    cleaned_keywords = []
-    for kw in keywords:
-        kw_clean = kw.replace("$", "").strip()
-        if kw_clean:
-            cleaned_keywords.append(kw_clean)
+    main_terms = NEWS_MAIN_TERMS.get(sym_up, [sym_up])
 
-    # Byg query som "TSLA OR TESLA OR ELON MUSK"
-    if cleaned_keywords:
-        q = " OR ".join(sorted(set(cleaned_keywords)))
-    else:
-        q = symbol
+    # Byg query som "TSLA OR TESLA OR \"TESLA INC\""
+    q = " OR ".join(f'"{t}"' if " " in t else t for t in main_terms)
 
     try:
         # 1) Hent nyheder fra API
@@ -320,7 +331,7 @@ def get_news_sentiment(symbol: str):
             "q": q,
             "language": "en",
             "sortBy": "publishedAt",
-            "pageSize": 30,
+            "pageSize": 40,  # lidt flere, fordi vi filtrerer hårdt bagefter
             "apiKey": st.secrets["news"]["api_key"],
         }
         r = requests.get(NEWS_API_URL, params=params, timeout=10)
@@ -344,7 +355,7 @@ def get_news_sentiment(symbol: str):
 
         analyzed = []  # (headline, url, sentiment_word, conf)
 
-        # 2) Kør FinBERT på title + description
+        # 2) Kør FinBERT på title + description, men kun hvis det ligner finansnyheder
         for art in articles:
             title = art.get("title") or ""
             desc = art.get("description") or ""
@@ -352,6 +363,16 @@ def get_news_sentiment(symbol: str):
 
             text = f"{title}. {desc}".strip()
             if len(text) < 20:
+                continue
+
+            text_up = text.upper()
+
+            # Skal indeholde mindst ét "main term" (fx TSLA eller TESLA)
+            if not any(term.upper() in text_up for term in main_terms):
+                continue
+
+            # Og mindst ét finansord som "STOCK", "EARNINGS", "SHARES" osv.
+            if not any(fin in text_up for fin in FINANCE_WORDS):
                 continue
 
             try:
@@ -371,9 +392,10 @@ def get_news_sentiment(symbol: str):
                 continue
 
         if not analyzed:
+            # Vi fik artikler, men ingen så tilstrækkeligt finansielle ud
             return (
                 0,
-                "Kunne ikke analysere nyhedsartikler lige nu",
+                "Ingen tydeligt finansielle nyheder fundet for denne aktie lige nu",
                 None,
                 None,
                 0,
